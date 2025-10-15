@@ -16,17 +16,37 @@ import {
   Trash2,
   ChevronDown,
   XCircle,
+  Code,
+  MessageSquare,
+  FileText,
+  Monitor,
+  Eye,
+  EyeOff,
+  RefreshCw,
+  Play,
+  StopCircle,
+  MoreVertical,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { toast } from 'sonner'
 import { Claude, Codex, Cursor, Gemini, OpenCode } from '@/components/logos'
 import { useTasks } from '@/components/app-layout'
-import { TaskDuration } from '@/components/task-duration'
+import {
+  getShowFilesPane,
+  setShowFilesPane as saveShowFilesPane,
+  getShowCodePane,
+  setShowCodePane as saveShowCodePane,
+  getShowPreviewPane,
+  setShowPreviewPane as saveShowPreviewPane,
+  getShowChatPane,
+  setShowChatPane as saveShowChatPane,
+} from '@/lib/utils/cookies'
 import { FileBrowser } from '@/components/file-browser'
 import { FileDiffViewer } from '@/components/file-diff-viewer'
 import { CreatePRDialog } from '@/components/create-pr-dialog'
 import { MergePRDialog } from '@/components/merge-pr-dialog'
+import { TaskChat } from '@/components/task-chat'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -39,6 +59,9 @@ import {
 } from '@/components/ui/alert-dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Label } from '@/components/ui/label'
 import { useRouter } from 'next/navigation'
 import BrowserbaseIcon from '@/components/icons/browserbase-icon'
 import Context7Icon from '@/components/icons/context7-icon'
@@ -53,6 +76,7 @@ import VercelIcon from '@/components/icons/vercel-icon'
 
 interface TaskDetailsProps {
   task: Task
+  maxSandboxDuration?: number
 }
 
 interface DiffData {
@@ -116,20 +140,24 @@ const DEFAULT_MODELS = {
   opencode: 'gpt-5',
 } as const
 
-export function TaskDetails({ task }: TaskDetailsProps) {
-  const [isStopping, setIsStopping] = useState(false)
+export function TaskDetails({ task, maxSandboxDuration = 5 }: TaskDetailsProps) {
   const [optimisticStatus, setOptimisticStatus] = useState<Task['status'] | null>(null)
   const [mcpServers, setMcpServers] = useState<Connector[]>([])
   const [loadingMcpServers, setLoadingMcpServers] = useState(false)
   const [selectedFile, setSelectedFile] = useState<string | undefined>(undefined)
   const [diffsCache, setDiffsCache] = useState<Record<string, DiffData>>({})
   const loadingDiffsRef = useRef(false)
+  const [refreshKey, setRefreshKey] = useState(0)
+  const previousStatusRef = useRef<Task['status']>(task.status)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [showTryAgainDialog, setShowTryAgainDialog] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [isTryingAgain, setIsTryingAgain] = useState(false)
   const [selectedAgent, setSelectedAgent] = useState(task.selectedAgent || 'claude')
   const [selectedModel, setSelectedModel] = useState<string>(task.selectedModel || DEFAULT_MODELS.claude)
+  const [tryAgainInstallDeps, setTryAgainInstallDeps] = useState(task.installDependencies || false)
+  const [tryAgainMaxDuration, setTryAgainMaxDuration] = useState(task.maxDuration || maxSandboxDuration)
+  const [tryAgainKeepAlive, setTryAgainKeepAlive] = useState(task.keepAlive || false)
   const [deploymentUrl, setDeploymentUrl] = useState<string | null>(task.previewUrl || null)
   const [loadingDeployment, setLoadingDeployment] = useState(false)
   const [showPRDialog, setShowPRDialog] = useState(false)
@@ -140,6 +168,27 @@ export function TaskDetails({ task }: TaskDetailsProps) {
   const [isClosingPR, setIsClosingPR] = useState(false)
   const [isReopeningPR, setIsReopeningPR] = useState(false)
   const [isMergingPR, setIsMergingPR] = useState(false)
+  const [viewMode, setViewMode] = useState<'changes' | 'all'>('changes')
+  const [activeTab, setActiveTab] = useState<'code' | 'chat' | 'preview'>('code')
+  const [showFilesList, setShowFilesList] = useState(false)
+  const [showPreview, setShowPreview] = useState(false)
+  const [sandboxTimeRemaining, setSandboxTimeRemaining] = useState<string | null>(null)
+
+  // Desktop pane toggles - initialize from cookies
+  const [showFilesPane, setShowFilesPane] = useState(() => getShowFilesPane())
+  const [showCodePane, setShowCodePane] = useState(() => getShowCodePane())
+  const [showPreviewPane, setShowPreviewPane] = useState(() => getShowPreviewPane())
+  const [showChatPane, setShowChatPane] = useState(() => getShowChatPane())
+  const [previewKey, setPreviewKey] = useState(0)
+  const [isRestartingDevServer, setIsRestartingDevServer] = useState(false)
+  const [isStoppingSandbox, setIsStoppingSandbox] = useState(false)
+  const [isStartingSandbox, setIsStartingSandbox] = useState(false)
+
+  // File search state
+  const [fileSearchQuery, setFileSearchQuery] = useState('')
+  const [showFileDropdown, setShowFileDropdown] = useState(false)
+  const [allFiles, setAllFiles] = useState<string[]>([])
+  const fileSearchRef = useRef<HTMLDivElement>(null)
   const { refreshTasks } = useTasks()
   const router = useRouter()
 
@@ -164,6 +213,43 @@ export function TaskDetails({ task }: TaskDetailsProps) {
       setOptimisticStatus(null)
     }
   }, [task.status, optimisticStatus])
+
+  // Calculate and update sandbox time remaining
+  useEffect(() => {
+    // Show timer if keepAlive is enabled and sandbox has been created (not pending)
+    if (!task.keepAlive || currentStatus === 'pending' || !task.createdAt) {
+      setSandboxTimeRemaining(null)
+      return
+    }
+
+    const calculateTimeRemaining = () => {
+      // Sandbox timeout starts from when it was CREATED, not completed
+      const createdTime = new Date(task.createdAt!).getTime()
+      const now = Date.now()
+      const maxDurationMs = (task.maxDuration || 5) * 60 * 60 * 1000
+      const elapsed = now - createdTime
+      const remaining = maxDurationMs - elapsed
+
+      if (remaining <= 0) {
+        return null
+      }
+
+      const hours = Math.floor(remaining / (60 * 60 * 1000))
+      const minutes = Math.floor((remaining % (60 * 60 * 1000)) / (60 * 1000))
+
+      return `${hours}h ${minutes}m`
+    }
+
+    // Update immediately
+    setSandboxTimeRemaining(calculateTimeRemaining())
+
+    // Update every minute
+    const interval = setInterval(() => {
+      setSandboxTimeRemaining(calculateTimeRemaining())
+    }, 60000) // 60 seconds
+
+    return () => clearInterval(interval)
+  }, [currentStatus, task.keepAlive, task.createdAt])
 
   const getAgentLogo = (agent: string | null) => {
     if (!agent) return null
@@ -424,38 +510,132 @@ export function TaskDetails({ task }: TaskDetailsProps) {
   }, [task.prNumber])
 
   // Fetch all diffs when files list changes
-  const fetchAllDiffs = async (filesList: string[]) => {
-    if (!filesList.length || loadingDiffsRef.current) return
+  const fetchAllDiffs = useCallback(
+    async (filesList: string[]) => {
+      if (!filesList.length || loadingDiffsRef.current) return
 
-    loadingDiffsRef.current = true
-    const newDiffsCache: Record<string, DiffData> = {}
+      // Store all files for search
+      setAllFiles(filesList)
 
-    try {
-      // Fetch all diffs in parallel
-      const diffPromises = filesList.map(async (filename) => {
-        try {
-          const params = new URLSearchParams()
-          params.set('filename', filename)
+      loadingDiffsRef.current = true
+      const newDiffsCache: Record<string, DiffData> = {}
 
-          const response = await fetch(`/api/tasks/${task.id}/diff?${params.toString()}`)
-          const result = await response.json()
+      try {
+        // Fetch all diffs in parallel
+        const diffPromises = filesList.map(async (filename) => {
+          try {
+            const params = new URLSearchParams()
+            params.set('filename', filename)
 
-          if (response.ok && result.success) {
-            newDiffsCache[filename] = result.data
+            const response = await fetch(`/api/tasks/${task.id}/diff?${params.toString()}`)
+            const result = await response.json()
+
+            if (response.ok && result.success) {
+              newDiffsCache[filename] = result.data
+            }
+          } catch (err) {
+            console.error('Error fetching diff for file:', err)
           }
-        } catch (err) {
-          console.error('Error fetching diff for file:', err)
-        }
-      })
+        })
 
-      await Promise.all(diffPromises)
-      setDiffsCache(newDiffsCache)
-    } catch (error) {
-      console.error('Error fetching diffs:', error)
-    } finally {
-      loadingDiffsRef.current = false
+        await Promise.all(diffPromises)
+        setDiffsCache(newDiffsCache)
+      } catch (error) {
+        console.error('Error fetching diffs:', error)
+      } finally {
+        loadingDiffsRef.current = false
+      }
+    },
+    [task.id],
+  )
+
+  // Handle click outside file dropdown
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (fileSearchRef.current && !fileSearchRef.current.contains(event.target as Node)) {
+        setShowFileDropdown(false)
+      }
     }
-  }
+
+    if (showFileDropdown) {
+      document.addEventListener('mousedown', handleClickOutside)
+      return () => document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [showFileDropdown])
+
+  // Keyboard shortcuts for pane toggles
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      // Only trigger if Alt is pressed and no other modifiers
+      if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
+        return
+      }
+
+      // Don't trigger if user is typing in an input/textarea
+      const target = event.target as HTMLElement
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+        return
+      }
+
+      // Use event.code instead of event.key to handle macOS Option key special characters
+      switch (event.code) {
+        case 'Digit1':
+          event.preventDefault()
+          setShowFilesPane((prev) => {
+            const newValue = !prev
+            saveShowFilesPane(newValue)
+            return newValue
+          })
+          break
+        case 'Digit2':
+          event.preventDefault()
+          setShowCodePane((prev) => {
+            const newValue = !prev
+            saveShowCodePane(newValue)
+            return newValue
+          })
+          break
+        case 'Digit3':
+          event.preventDefault()
+          setShowPreviewPane((prev) => {
+            const newValue = !prev
+            saveShowPreviewPane(newValue)
+            return newValue
+          })
+          break
+        case 'Digit4':
+          event.preventDefault()
+          setShowChatPane((prev) => {
+            const newValue = !prev
+            saveShowChatPane(newValue)
+            return newValue
+          })
+          break
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
+  // Trigger refresh when task completes
+  useEffect(() => {
+    const currentStatus = optimisticStatus || task.status
+    const previousStatus = previousStatusRef.current
+
+    // If task transitions from processing/pending to completed/error/stopped, trigger refresh
+    if (
+      (previousStatus === 'processing' || previousStatus === 'pending') &&
+      (currentStatus === 'completed' || currentStatus === 'error' || currentStatus === 'stopped')
+    ) {
+      setRefreshKey((prev) => prev + 1)
+      // Clear diffs cache to force reload
+      setDiffsCache({})
+      setSelectedFile(undefined)
+    }
+
+    previousStatusRef.current = currentStatus
+  }, [task.status, optimisticStatus])
 
   // Update model when agent changes
   useEffect(() => {
@@ -576,6 +756,9 @@ export function TaskDetails({ task }: TaskDetailsProps) {
           repoUrl: task.repoUrl,
           selectedAgent,
           selectedModel,
+          installDependencies: tryAgainInstallDeps,
+          maxDuration: tryAgainMaxDuration,
+          keepAlive: tryAgainKeepAlive,
         }),
       })
 
@@ -620,70 +803,74 @@ export function TaskDetails({ task }: TaskDetailsProps) {
     }
   }
 
-  const handleStopTask = async () => {
-    setIsStopping(true)
-    // Optimistically update the status to 'stopped'
-    setOptimisticStatus('stopped')
-
+  const handleRestartDevServer = async () => {
+    setIsRestartingDevServer(true)
     try {
-      const response = await fetch(`/api/tasks/${task.id}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ action: 'stop' }),
+      const response = await fetch(`/api/tasks/${task.id}/restart-dev`, {
+        method: 'POST',
       })
 
       if (response.ok) {
-        toast.success('Task stopped successfully!')
-        refreshTasks() // Refresh the sidebar
+        toast.success('Dev server restarted successfully!')
+        // Refresh the preview after a short delay to allow server to start
+        setTimeout(() => {
+          setPreviewKey((prev) => prev + 1)
+        }, 2000)
       } else {
         const error = await response.json()
-        toast.error(error.error || 'Failed to stop task')
-        // Revert optimistic update on error
-        setOptimisticStatus(null)
+        toast.error(error.error || 'Failed to restart dev server')
       }
     } catch (error) {
-      console.error('Error stopping task:', error)
-      toast.error('Failed to stop task')
-      // Revert optimistic update on error
-      setOptimisticStatus(null)
+      console.error('Error restarting dev server:', error)
+      toast.error('Failed to restart dev server')
     } finally {
-      setIsStopping(false)
+      setIsRestartingDevServer(false)
     }
   }
 
-  const getStatusIcon = (status: Task['status']) => {
-    switch (status) {
-      case 'pending':
-        return <AlertCircle className="h-4 w-4" />
-      case 'processing':
-        return <Loader2 className="h-4 w-4 animate-spin" />
-      case 'completed':
-        return <CheckCircle className="h-4 w-4" />
-      case 'error':
-        return <AlertCircle className="h-4 w-4" />
-      case 'stopped':
-        return <AlertCircle className="h-4 w-4" />
-      default:
-        return <AlertCircle className="h-4 w-4" />
+  const handleStopSandbox = async () => {
+    setIsStoppingSandbox(true)
+    try {
+      const response = await fetch(`/api/tasks/${task.id}/stop-sandbox`, {
+        method: 'POST',
+      })
+
+      if (response.ok) {
+        toast.success('Sandbox stopped successfully!')
+        // Refresh tasks to update UI
+        await refreshTasks()
+      } else {
+        const error = await response.json()
+        toast.error(error.error || 'Failed to stop sandbox')
+      }
+    } catch (error) {
+      console.error('Error stopping sandbox:', error)
+      toast.error('Failed to stop sandbox')
+    } finally {
+      setIsStoppingSandbox(false)
     }
   }
 
-  const getStatusColor = (status: Task['status']) => {
-    switch (status) {
-      case 'pending':
-        return 'text-gray-500'
-      case 'processing':
-        return 'text-blue-500'
-      case 'completed':
-        return 'text-green-500'
-      case 'error':
-        return 'text-red-500'
-      case 'stopped':
-        return 'text-orange-500'
-      default:
-        return 'text-gray-500'
+  const handleStartSandbox = async () => {
+    setIsStartingSandbox(true)
+    try {
+      const response = await fetch(`/api/tasks/${task.id}/start-sandbox`, {
+        method: 'POST',
+      })
+
+      if (response.ok) {
+        toast.success('Sandbox started successfully!')
+        // Refresh tasks to update UI
+        await refreshTasks()
+      } else {
+        const error = await response.json()
+        toast.error(error.error || 'Failed to start sandbox')
+      }
+    } catch (error) {
+      console.error('Error starting sandbox:', error)
+      toast.error('Failed to start sandbox')
+    } finally {
+      setIsStartingSandbox(false)
     }
   }
 
@@ -694,18 +881,6 @@ export function TaskDetails({ task }: TaskDetailsProps) {
         {/* Prompt */}
         <div className="flex items-center gap-2">
           <p className="text-lg md:text-2xl flex-1 truncate">{task.prompt}</p>
-          {currentStatus === 'processing' && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleStopTask}
-              disabled={isStopping}
-              className="h-7 w-7 md:h-8 md:w-8 p-0 flex-shrink-0"
-              title="Stop task"
-            >
-              <Square className="h-3.5 w-3.5 md:h-4 md:w-4" fill="currentColor" />
-            </Button>
-          )}
           {currentStatus === 'completed' && task.repoUrl && task.branchName && (
             <>
               {!prUrl && prStatus !== 'merged' && prStatus !== 'closed' && (
@@ -837,32 +1012,6 @@ export function TaskDetails({ task }: TaskDetailsProps) {
 
         {/* Compact info row */}
         <div className="flex items-center gap-2 md:gap-4 flex-wrap text-xs md:text-sm">
-          {/* Status + Duration */}
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <div className={cn('flex items-center gap-2 cursor-help', getStatusColor(currentStatus))}>
-                  {getStatusIcon(currentStatus)}
-                  <span className="text-muted-foreground">
-                    <TaskDuration task={task} hideTitle={true} />
-                  </span>
-                </div>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" className="space-y-1">
-                <div>
-                  <span className="font-medium">Created:</span>{' '}
-                  <span className="text-muted-foreground">{formatDateTime(new Date(task.createdAt))}</span>
-                </div>
-                <div>
-                  <span className="font-medium">Completed:</span>{' '}
-                  <span className="text-muted-foreground">
-                    {task.completedAt ? formatDateTime(new Date(task.completedAt)) : 'Not completed'}
-                  </span>
-                </div>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-
           {/* Repo */}
           {task.repoUrl && (
             <div className="flex items-center gap-1.5 md:gap-2 min-w-0">
@@ -997,53 +1146,472 @@ export function TaskDetails({ task }: TaskDetailsProps) {
               </a>
             </div>
           )}
+
+          {/* Desktop Pane Toggles - Only show on desktop */}
+          <div className="hidden md:flex items-center gap-1 ml-auto">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                const newValue = !showFilesPane
+                setShowFilesPane(newValue)
+                saveShowFilesPane(newValue)
+              }}
+              className={cn(
+                'h-7 px-3 text-xs font-medium transition-colors',
+                showFilesPane
+                  ? 'bg-accent text-accent-foreground'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-accent/50',
+              )}
+            >
+              Files
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                const newValue = !showCodePane
+                setShowCodePane(newValue)
+                saveShowCodePane(newValue)
+              }}
+              className={cn(
+                'h-7 px-3 text-xs font-medium transition-colors',
+                showCodePane
+                  ? 'bg-accent text-accent-foreground'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-accent/50',
+              )}
+            >
+              Code
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                const newValue = !showPreviewPane
+                setShowPreviewPane(newValue)
+                saveShowPreviewPane(newValue)
+              }}
+              className={cn(
+                'h-7 px-3 text-xs font-medium transition-colors',
+                showPreviewPane
+                  ? 'bg-accent text-accent-foreground'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-accent/50',
+              )}
+            >
+              Sandbox
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                const newValue = !showChatPane
+                setShowChatPane(newValue)
+                saveShowChatPane(newValue)
+              }}
+              className={cn(
+                'h-7 px-3 text-xs font-medium transition-colors',
+                showChatPane
+                  ? 'bg-accent text-accent-foreground'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-accent/50',
+              )}
+            >
+              Chat
+            </Button>
+          </div>
         </div>
       </div>
 
-      {/* Changes Section */}
-      {currentStatus === 'pending' || currentStatus === 'processing' ? (
-        <div className="flex-1 flex items-center justify-center pl-6 pr-3">
-          <div className="text-center">
-            <Loader2 className="h-8 w-8 animate-spin mx-auto mb-3 text-muted-foreground" />
-            <p className="text-sm text-muted-foreground">Working...</p>
-          </div>
-        </div>
-      ) : task.branchName ? (
-        <div className="flex-1 flex flex-col md:flex-row gap-3 md:gap-6 pl-3 pr-3 md:pr-6 pt-3 md:pt-6 pb-3 md:pb-6 min-h-0 overflow-hidden">
-          {/* File Browser */}
-          <div className="w-full md:w-1/3 h-64 md:h-auto overflow-y-auto min-h-0">
-            <FileBrowser
-              taskId={task.id}
-              branchName={task.branchName}
-              onFileSelect={setSelectedFile}
-              onFilesLoaded={fetchAllDiffs}
-              selectedFile={selectedFile}
-            />
-          </div>
-
-          {/* Diff Viewer */}
-          <div className="flex-1 min-h-0 bg-card rounded-md border overflow-hidden">
-            <div className="overflow-y-auto h-full">
-              <FileDiffViewer
+      {/* Changes Section - Only show when a branch exists */}
+      {task.branchName && task.branchName.trim().length > 0 ? (
+        <>
+          {/* Desktop Layout */}
+          <div className="hidden md:flex flex-1 gap-3 md:gap-4 pl-3 pr-3 md:pr-6 pt-3 md:pt-6 pb-3 md:pb-6 min-h-0 overflow-hidden">
+            {/* File Browser - Always rendered but hidden with CSS to ensure files are loaded */}
+            <div className={cn('w-1/4 h-auto overflow-y-auto min-h-0 flex-shrink-0', !showFilesPane && 'hidden')}>
+              <FileBrowser
+                taskId={task.id}
+                branchName={task.branchName}
+                onFileSelect={setSelectedFile}
+                onFilesLoaded={fetchAllDiffs}
                 selectedFile={selectedFile}
-                diffsCache={diffsCache}
-                isInitialLoading={Object.keys(diffsCache).length === 0}
+                refreshKey={refreshKey}
+                viewMode={viewMode}
+                onViewModeChange={setViewMode}
               />
             </div>
+
+            {/* Code Viewer */}
+            {showCodePane && (
+              <div className="flex-1 min-h-0 min-w-0">
+                <div className="bg-card rounded-md border overflow-hidden h-full flex flex-col">
+                  {/* Code Toolbar */}
+                  <div
+                    ref={fileSearchRef}
+                    className="relative flex items-center gap-2 px-3 py-2 border-b bg-muted/50 flex-shrink-0 min-h-[40px]"
+                  >
+                    <FileText className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                    <input
+                      type="text"
+                      value={fileSearchQuery || selectedFile || ''}
+                      onChange={(e) => {
+                        const newValue = e.target.value
+                        setFileSearchQuery(newValue)
+                        // If user clears the input, also clear the selected file
+                        if (newValue === '') {
+                          setSelectedFile(undefined)
+                        }
+                        setShowFileDropdown(true)
+                      }}
+                      onFocus={() => setShowFileDropdown(true)}
+                      placeholder="Type to search files..."
+                      className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none"
+                    />
+
+                    {/* Dropdown */}
+                    {showFileDropdown &&
+                      (() => {
+                        const query = fileSearchQuery.toLowerCase()
+                        const filteredFiles = allFiles.filter((file) => file.toLowerCase().includes(query)).slice(0, 50)
+
+                        if (filteredFiles.length === 0) return null
+
+                        return (
+                          <div className="absolute top-full left-0 right-0 mt-1 bg-popover border rounded-md shadow-md max-h-[300px] overflow-y-auto z-50">
+                            {filteredFiles.map((file) => (
+                              <button
+                                key={file}
+                                onClick={() => {
+                                  setSelectedFile(file)
+                                  setFileSearchQuery('')
+                                  setShowFileDropdown(false)
+                                }}
+                                className={cn(
+                                  'w-full text-left px-3 py-2 text-sm hover:bg-accent transition-colors',
+                                  selectedFile === file && 'bg-accent',
+                                )}
+                              >
+                                {file}
+                              </button>
+                            ))}
+                          </div>
+                        )
+                      })()}
+                  </div>
+                  <div className="overflow-y-auto flex-1">
+                    <FileDiffViewer
+                      selectedFile={selectedFile}
+                      diffsCache={diffsCache}
+                      isInitialLoading={Object.keys(diffsCache).length === 0}
+                      viewMode={viewMode}
+                      taskId={task.id}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Preview */}
+            {showPreviewPane && (
+              <div className="flex-1 min-h-0 min-w-0">
+                <div className="bg-card rounded-md border overflow-hidden h-full flex flex-col">
+                  {/* Preview Toolbar */}
+                  <div className="flex items-center gap-2 px-3 py-2 border-b bg-muted/50 flex-shrink-0 min-h-[40px]">
+                    <Monitor className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                    {task.sandboxUrl ? (
+                      <a
+                        href={task.sandboxUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sm text-muted-foreground hover:text-foreground truncate flex-1 transition-colors"
+                        title={task.sandboxUrl}
+                      >
+                        {task.sandboxUrl}
+                      </a>
+                    ) : (
+                      <span className="text-sm text-muted-foreground truncate flex-1">Sandbox not running</span>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setPreviewKey((prev) => prev + 1)}
+                      className="h-6 w-6 p-0 flex-shrink-0"
+                      title="Refresh Preview"
+                      disabled={!task.sandboxUrl}
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" />
+                    </Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 w-6 p-0 flex-shrink-0"
+                          disabled={isRestartingDevServer || isStoppingSandbox || isStartingSandbox}
+                        >
+                          <MoreVertical className="h-3.5 w-3.5" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        {task.keepAlive && (
+                          <>
+                            {task.sandboxUrl ? (
+                              <DropdownMenuItem onClick={handleStopSandbox} disabled={isStoppingSandbox}>
+                                {isStoppingSandbox ? (
+                                  <>
+                                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                    Stopping...
+                                  </>
+                                ) : (
+                                  'Stop Sandbox'
+                                )}
+                              </DropdownMenuItem>
+                            ) : (
+                              <DropdownMenuItem onClick={handleStartSandbox} disabled={isStartingSandbox}>
+                                {isStartingSandbox ? (
+                                  <>
+                                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                    Starting...
+                                  </>
+                                ) : (
+                                  'Start Sandbox'
+                                )}
+                              </DropdownMenuItem>
+                            )}
+                          </>
+                        )}
+                        <DropdownMenuItem
+                          onClick={handleRestartDevServer}
+                          disabled={isRestartingDevServer || !task.sandboxUrl}
+                        >
+                          {isRestartingDevServer ? (
+                            <>
+                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                              Restarting...
+                            </>
+                          ) : (
+                            'Restart Dev Server'
+                          )}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                  <div className="overflow-y-auto flex-1">
+                    {task.sandboxUrl ? (
+                      <iframe
+                        key={previewKey}
+                        src={task.sandboxUrl}
+                        className="w-full h-full border-0"
+                        title="Preview"
+                        sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals"
+                      />
+                    ) : (
+                      <div className="flex items-center justify-center h-full text-muted-foreground text-sm p-6 text-center">
+                        <div>
+                          <p className="mb-1">Sandbox not running</p>
+                          <p className="text-xs">
+                            {task.keepAlive
+                              ? 'Start it from the menu above to view the preview'
+                              : 'This task does not have keep-alive enabled'}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Chat */}
+            {showChatPane && (
+              <div className="w-1/4 h-auto min-h-0 flex-shrink-0">
+                <TaskChat taskId={task.id} task={task} />
+              </div>
+            )}
           </div>
-        </div>
+
+          {/* Mobile Layout */}
+          <div className="md:hidden flex flex-col flex-1 min-h-0 relative pb-14">
+            {/* Content Area */}
+            <div className="flex-1 overflow-hidden px-3 pt-3">
+              {activeTab === 'code' ? (
+                <div className="relative h-full">
+                  {/* Current File Path Bar */}
+                  <div className="mb-2 flex items-center gap-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setShowFilesList(true)}
+                      className="h-6 w-6 p-0 flex-shrink-0"
+                    >
+                      <FileText className="h-4 w-4" />
+                    </Button>
+                    <span className="text-sm text-muted-foreground truncate flex-1">
+                      {selectedFile || 'Select a file'}
+                    </span>
+                  </div>
+
+                  {/* Diff Viewer */}
+                  <div className="bg-card rounded-md border overflow-hidden h-[calc(100%-3rem)]">
+                    <div className="overflow-y-auto h-full">
+                      <FileDiffViewer
+                        selectedFile={selectedFile}
+                        diffsCache={diffsCache}
+                        isInitialLoading={Object.keys(diffsCache).length === 0}
+                        viewMode={viewMode}
+                        taskId={task.id}
+                      />
+                    </div>
+                  </div>
+                </div>
+              ) : activeTab === 'chat' ? (
+                <div className="h-full pb-3">
+                  <TaskChat taskId={task.id} task={task} />
+                </div>
+              ) : activeTab === 'preview' ? (
+                <div className="h-full pb-3">
+                  <div className="bg-card rounded-md border overflow-hidden h-full">
+                    {task.sandboxUrl ? (
+                      <iframe
+                        src={task.sandboxUrl}
+                        className="w-full h-full border-0"
+                        title="Preview"
+                        sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals"
+                      />
+                    ) : (
+                      <div className="flex items-center justify-center h-full text-muted-foreground text-sm p-6 text-center">
+                        <div>
+                          <p className="mb-1">Sandbox not running</p>
+                          <p className="text-xs mb-4">
+                            {task.keepAlive
+                              ? 'Start the sandbox to view the preview'
+                              : 'This task does not have keep-alive enabled'}
+                          </p>
+                          {task.keepAlive && !task.sandboxUrl && (
+                            <Button
+                              size="sm"
+                              onClick={handleStartSandbox}
+                              disabled={isStartingSandbox}
+                              className="mt-2"
+                            >
+                              {isStartingSandbox ? (
+                                <>
+                                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                  Starting...
+                                </>
+                              ) : (
+                                'Start Sandbox'
+                              )}
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
+            {/* Bottom Tab Bar */}
+            <div className="absolute bottom-0 left-0 right-0 border-t bg-background">
+              <div className="flex h-14">
+                <button
+                  onClick={() => setActiveTab('code')}
+                  className={cn(
+                    'flex-1 flex flex-col items-center justify-center gap-1 transition-colors',
+                    activeTab === 'code' ? 'text-primary' : 'text-muted-foreground',
+                  )}
+                >
+                  <Code className="h-5 w-5" />
+                  <span className="text-xs font-medium">Code</span>
+                </button>
+                <button
+                  onClick={() => setActiveTab('chat')}
+                  className={cn(
+                    'flex-1 flex flex-col items-center justify-center gap-1 transition-colors',
+                    activeTab === 'chat' ? 'text-primary' : 'text-muted-foreground',
+                  )}
+                >
+                  <MessageSquare className="h-5 w-5" />
+                  <span className="text-xs font-medium">Chat</span>
+                </button>
+                <button
+                  onClick={() => setActiveTab('preview')}
+                  className={cn(
+                    'flex-1 flex flex-col items-center justify-center gap-1 transition-colors',
+                    activeTab === 'preview' ? 'text-primary' : 'text-muted-foreground',
+                  )}
+                >
+                  <Monitor className="h-5 w-5" />
+                  <span className="text-xs font-medium">Sandbox</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Files List Drawer */}
+            <Drawer open={showFilesList} onOpenChange={setShowFilesList}>
+              <DrawerContent>
+                <DrawerHeader>
+                  <div className="flex items-center justify-between gap-2">
+                    <DrawerTitle>Files</DrawerTitle>
+                    <div className="inline-flex rounded-md border border-border bg-muted/50 p-0.5">
+                      <Button
+                        variant={viewMode === 'changes' ? 'secondary' : 'ghost'}
+                        size="sm"
+                        onClick={() => setViewMode('changes')}
+                        className={`h-6 px-2 text-xs rounded-sm ${
+                          viewMode === 'changes'
+                            ? 'bg-background shadow-sm'
+                            : 'hover:bg-transparent hover:text-foreground'
+                        }`}
+                      >
+                        Changes
+                      </Button>
+                      <Button
+                        variant={viewMode === 'all' ? 'secondary' : 'ghost'}
+                        size="sm"
+                        onClick={() => setViewMode('all')}
+                        className={`h-6 px-2 text-xs rounded-sm ${
+                          viewMode === 'all' ? 'bg-background shadow-sm' : 'hover:bg-transparent hover:text-foreground'
+                        }`}
+                      >
+                        All Files
+                      </Button>
+                    </div>
+                  </div>
+                </DrawerHeader>
+                <div className="overflow-y-auto max-h-[60vh] px-4 pb-4">
+                  <FileBrowser
+                    taskId={task.id}
+                    branchName={task.branchName}
+                    onFileSelect={(file) => {
+                      setSelectedFile(file)
+                      setShowFilesList(false)
+                    }}
+                    onFilesLoaded={fetchAllDiffs}
+                    selectedFile={selectedFile}
+                    refreshKey={refreshKey}
+                    viewMode={viewMode}
+                    onViewModeChange={setViewMode}
+                    hideHeader={true}
+                  />
+                </div>
+              </DrawerContent>
+            </Drawer>
+          </div>
+        </>
       ) : null}
 
       {/* Try Again Dialog */}
       <AlertDialog open={showTryAgainDialog} onOpenChange={setShowTryAgainDialog}>
-        <AlertDialogContent>
+        <AlertDialogContent className="max-w-2xl">
           <AlertDialogHeader>
             <AlertDialogTitle>Try Again</AlertDialogTitle>
             <AlertDialogDescription>Create a new task with the same prompt and repository.</AlertDialogDescription>
           </AlertDialogHeader>
-          <div className="py-4">
+          <div className="py-4 space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
+                <label className="text-sm font-medium mb-2 block">Agent</label>
                 <Select value={selectedAgent} onValueChange={setSelectedAgent}>
                   <SelectTrigger className="w-full">
                     <SelectValue placeholder="Select an agent" />
@@ -1061,6 +1629,7 @@ export function TaskDetails({ task }: TaskDetailsProps) {
                 </Select>
               </div>
               <div>
+                <label className="text-sm font-medium mb-2 block">Model</label>
                 <Select value={selectedModel} onValueChange={setSelectedModel}>
                   <SelectTrigger className="w-full">
                     <SelectValue placeholder="Select a model" />
@@ -1073,6 +1642,66 @@ export function TaskDetails({ task }: TaskDetailsProps) {
                     )) || []}
                   </SelectContent>
                 </Select>
+              </div>
+            </div>
+
+            {/* Task Options */}
+            <div className="border-t pt-4">
+              <h3 className="text-sm font-medium mb-3">Task Options</h3>
+              <div className="space-y-4">
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="try-again-install-deps"
+                    checked={tryAgainInstallDeps}
+                    onCheckedChange={(checked) => setTryAgainInstallDeps(!!checked)}
+                  />
+                  <Label
+                    htmlFor="try-again-install-deps"
+                    className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                  >
+                    Install Dependencies?
+                  </Label>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="try-again-max-duration" className="text-sm font-medium">
+                    Maximum Duration
+                  </Label>
+                  <Select
+                    value={tryAgainMaxDuration.toString()}
+                    onValueChange={(value) => setTryAgainMaxDuration(parseInt(value))}
+                  >
+                    <SelectTrigger id="try-again-max-duration" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="5">5 minutes</SelectItem>
+                      <SelectItem value="10">10 minutes</SelectItem>
+                      <SelectItem value="15">15 minutes</SelectItem>
+                      <SelectItem value="30">30 minutes</SelectItem>
+                      <SelectItem value="45">45 minutes</SelectItem>
+                      <SelectItem value="60">1 hour</SelectItem>
+                      <SelectItem value="120">2 hours</SelectItem>
+                      <SelectItem value="180">3 hours</SelectItem>
+                      <SelectItem value="240">4 hours</SelectItem>
+                      <SelectItem value="300">5 hours</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="try-again-keep-alive"
+                    checked={tryAgainKeepAlive}
+                    onCheckedChange={(checked) => setTryAgainKeepAlive(!!checked)}
+                  />
+                  <Label
+                    htmlFor="try-again-keep-alive"
+                    className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                  >
+                    Keep Alive ({maxSandboxDuration} {maxSandboxDuration === 1 ? 'hour' : 'hours'} max)
+                  </Label>
+                </div>
               </div>
             </div>
           </div>

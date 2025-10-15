@@ -83,7 +83,8 @@ export const tasks = pgTable('tasks', {
   selectedAgent: text('selected_agent').default('claude'),
   selectedModel: text('selected_model'),
   installDependencies: boolean('install_dependencies').default(false),
-  maxDuration: integer('max_duration').default(5),
+  maxDuration: integer('max_duration').default(parseInt(process.env.MAX_SANDBOX_DURATION || '5', 10)),
+  keepAlive: boolean('keep_alive').default(false),
   status: text('status', {
     enum: ['pending', 'processing', 'completed', 'error', 'stopped'],
   })
@@ -93,6 +94,8 @@ export const tasks = pgTable('tasks', {
   logs: jsonb('logs').$type<LogEntry[]>(),
   error: text('error'),
   branchName: text('branch_name'),
+  sandboxId: text('sandbox_id'),
+  agentSessionId: text('agent_session_id'),
   sandboxUrl: text('sandbox_url'),
   previewUrl: text('preview_url'),
   prUrl: text('pr_url'),
@@ -117,12 +120,15 @@ export const insertTaskSchema = z.object({
   selectedAgent: z.enum(['claude', 'codex', 'cursor', 'gemini', 'opencode']).default('claude'),
   selectedModel: z.string().optional(),
   installDependencies: z.boolean().default(false),
-  maxDuration: z.number().default(5),
+  maxDuration: z.number().default(parseInt(process.env.MAX_SANDBOX_DURATION || '5', 10)),
+  keepAlive: z.boolean().default(false),
   status: z.enum(['pending', 'processing', 'completed', 'error', 'stopped']).default('pending'),
   progress: z.number().min(0).max(100).default(0),
   logs: z.array(logEntrySchema).optional(),
   error: z.string().optional(),
   branchName: z.string().optional(),
+  sandboxId: z.string().optional(),
+  agentSessionId: z.string().optional(),
   sandboxUrl: z.string().optional(),
   previewUrl: z.string().optional(),
   prUrl: z.string().optional(),
@@ -145,11 +151,14 @@ export const selectTaskSchema = z.object({
   selectedModel: z.string().nullable(),
   installDependencies: z.boolean().nullable(),
   maxDuration: z.number().nullable(),
+  keepAlive: z.boolean().nullable(),
   status: z.enum(['pending', 'processing', 'completed', 'error', 'stopped']),
   progress: z.number().nullable(),
   logs: z.array(logEntrySchema).nullable(),
   error: z.string().nullable(),
   branchName: z.string().nullable(),
+  sandboxId: z.string().nullable(),
+  agentSessionId: z.string().nullable(),
   sandboxUrl: z.string().nullable(),
   previewUrl: z.string().nullable(),
   prUrl: z.string().nullable(),
@@ -340,6 +349,78 @@ export const selectKeySchema = z.object({
 
 export type Key = z.infer<typeof selectKeySchema>
 export type InsertKey = z.infer<typeof insertKeySchema>
+
+// Task messages table - stores user and agent messages for each task
+export const taskMessages = pgTable('task_messages', {
+  id: text('id').primaryKey(),
+  taskId: text('task_id')
+    .notNull()
+    .references(() => tasks.id, { onDelete: 'cascade' }), // Foreign key to tasks table
+  role: text('role', {
+    enum: ['user', 'agent'],
+  }).notNull(), // Who sent the message
+  content: text('content').notNull(), // The message content
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+})
+
+export const insertTaskMessageSchema = z.object({
+  id: z.string().optional(),
+  taskId: z.string().min(1, 'Task ID is required'),
+  role: z.enum(['user', 'agent']),
+  content: z.string().min(1, 'Content is required'),
+  createdAt: z.date().optional(),
+})
+
+export const selectTaskMessageSchema = z.object({
+  id: z.string(),
+  taskId: z.string(),
+  role: z.enum(['user', 'agent']),
+  content: z.string(),
+  createdAt: z.date(),
+})
+
+export type TaskMessage = z.infer<typeof selectTaskMessageSchema>
+export type InsertTaskMessage = z.infer<typeof insertTaskMessageSchema>
+
+// Settings table - key-value pairs for overriding environment variables per user
+export const settings = pgTable(
+  'settings',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }), // Required user reference
+    key: text('key').notNull(), // Setting key (e.g., 'maxMessagesPerDay')
+    value: text('value').notNull(), // Setting value (stored as text)
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  },
+  (table) => ({
+    // Unique constraint: prevent duplicate keys per user
+    userIdKeyUnique: uniqueIndex('settings_user_id_key_idx').on(table.userId, table.key),
+  }),
+)
+
+export const insertSettingSchema = z.object({
+  id: z.string().optional(),
+  userId: z.string().min(1, 'User ID is required'),
+  key: z.string().min(1, 'Key is required'),
+  value: z.string().min(1, 'Value is required'),
+  createdAt: z.date().optional(),
+  updatedAt: z.date().optional(),
+})
+
+export const selectSettingSchema = z.object({
+  id: z.string(),
+  userId: z.string(),
+  key: z.string(),
+  value: z.string(),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+})
+
+export type Setting = z.infer<typeof selectSettingSchema>
+export type InsertSetting = z.infer<typeof insertSettingSchema>
 
 // Keep legacy export for backwards compatibility during migration
 export const userConnections = accounts

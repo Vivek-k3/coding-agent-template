@@ -40,13 +40,70 @@ function getLanguageFromFilename(filename: string): string {
   return langMap[ext || ''] || 'text'
 }
 
+function isImageFile(filename: string): boolean {
+  const ext = filename.split('.').pop()?.toLowerCase()
+  const imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'svg', 'webp', 'ico', 'tiff', 'tif']
+  return imageExtensions.includes(ext || '')
+}
+
+function isBinaryFile(filename: string): boolean {
+  const ext = filename.split('.').pop()?.toLowerCase()
+  const binaryExtensions = [
+    // Archives
+    'zip',
+    'tar',
+    'gz',
+    'rar',
+    '7z',
+    'bz2',
+    // Executables
+    'exe',
+    'dll',
+    'so',
+    'dylib',
+    // Databases
+    'db',
+    'sqlite',
+    'sqlite3',
+    // Media (non-image)
+    'mp3',
+    'mp4',
+    'avi',
+    'mov',
+    'wav',
+    'flac',
+    // Documents
+    'pdf',
+    'doc',
+    'docx',
+    'xls',
+    'xlsx',
+    'ppt',
+    'pptx',
+    // Fonts
+    'ttf',
+    'otf',
+    'woff',
+    'woff2',
+    'eot',
+    // Other binary
+    'bin',
+    'dat',
+    'dmg',
+    'iso',
+    'img',
+  ]
+  return binaryExtensions.includes(ext || '') || isImageFile(filename)
+}
+
 async function getFileContent(
   octokit: Octokit,
   owner: string,
   repo: string,
   path: string,
   ref: string,
-): Promise<string> {
+  isImage: boolean,
+): Promise<{ content: string; isBase64: boolean }> {
   try {
     const response = await octokit.rest.repos.getContent({
       owner,
@@ -56,14 +113,26 @@ async function getFileContent(
     })
 
     if ('content' in response.data && typeof response.data.content === 'string') {
-      return Buffer.from(response.data.content, 'base64').toString('utf-8')
+      // For images, return the base64 content as-is
+      if (isImage) {
+        return {
+          content: response.data.content,
+          isBase64: true,
+        }
+      }
+
+      // For text files, decode from base64
+      return {
+        content: Buffer.from(response.data.content, 'base64').toString('utf-8'),
+        isBase64: false,
+      }
     }
 
-    return ''
+    return { content: '', isBase64: false }
   } catch (error: unknown) {
     // File might not exist in this ref (e.g., new file)
     if (error && typeof error === 'object' && 'status' in error && error.status === 404) {
-      return ''
+      return { content: '', isBase64: false }
     }
     throw error
   }
@@ -119,9 +188,30 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     const [, owner, repo] = githubMatch
 
     try {
+      // Check if file is an image or other binary
+      const isImage = isImageFile(filename)
+      const isBinary = isBinaryFile(filename)
+
+      // For non-image binary files, return a special response
+      if (isBinary && !isImage) {
+        return NextResponse.json({
+          success: true,
+          data: {
+            filename,
+            oldContent: '',
+            newContent: '',
+            language: 'text',
+            isBinary: true,
+            isImage: false,
+          },
+        })
+      }
+
       // Get file content from both base and head commits
       let oldContent = ''
       let newContent = ''
+      let oldIsBase64 = false
+      let newIsBase64 = false
       let baseRef = 'main'
       let headRef = task.branchName
 
@@ -159,13 +249,17 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 
       // Get old content from base ref
       try {
-        oldContent = await getFileContent(octokit, owner, repo, filename, baseRef)
+        const result = await getFileContent(octokit, owner, repo, filename, baseRef, isImage)
+        oldContent = result.content
+        oldIsBase64 = result.isBase64
       } catch (error: unknown) {
         if (error && typeof error === 'object' && 'status' in error && error.status === 404) {
           // Try master if main doesn't work (only if we're using default branch names)
           if (baseRef === 'main') {
             try {
-              oldContent = await getFileContent(octokit, owner, repo, filename, 'master')
+              const result = await getFileContent(octokit, owner, repo, filename, 'master', isImage)
+              oldContent = result.content
+              oldIsBase64 = result.isBase64
               baseRef = 'master'
             } catch (masterError: unknown) {
               if (
@@ -180,10 +274,12 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
               }
               // File doesn't exist in base (could be a new file)
               oldContent = ''
+              oldIsBase64 = false
             }
           } else {
             // File doesn't exist at this commit (new file)
             oldContent = ''
+            oldIsBase64 = false
           }
         } else {
           throw error
@@ -192,12 +288,15 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 
       // Get new content from head ref
       try {
-        newContent = await getFileContent(octokit, owner, repo, filename, headRef)
+        const result = await getFileContent(octokit, owner, repo, filename, headRef, isImage)
+        newContent = result.content
+        newIsBase64 = result.isBase64
       } catch (error) {
         console.error('Error fetching new content from ref:', headRef, error)
         // File might have been deleted
         if (error && typeof error === 'object' && 'status' in error && error.status === 404) {
           newContent = ''
+          newIsBase64 = false
         } else {
           throw error
         }
@@ -220,6 +319,9 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
           oldContent: oldContent || '',
           newContent: newContent || '',
           language: getLanguageFromFilename(filename),
+          isBinary: false,
+          isImage,
+          isBase64: newIsBase64,
         },
       })
     } catch (error: unknown) {

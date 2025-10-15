@@ -1,10 +1,14 @@
 import { db } from '@/lib/db/client'
-import { tasks } from '@/lib/db/schema'
+import { tasks, taskMessages } from '@/lib/db/schema'
 import { eq, gte, and, isNull } from 'drizzle-orm'
+import { getMaxMessagesPerDay } from '@/lib/db/settings'
 
-const DAILY_TASK_LIMIT = 5
+export async function checkRateLimit(
+  userId: string,
+): Promise<{ allowed: boolean; remaining: number; total: number; resetAt: Date }> {
+  // Get max messages per day for this user (user-specific > global > env var)
+  const maxMessagesPerDay = await getMaxMessagesPerDay(userId)
 
-export async function checkRateLimit(userId: string): Promise<{ allowed: boolean; remaining: number; resetAt: Date }> {
   // Get start of today (UTC)
   const today = new Date()
   today.setUTCHours(0, 0, 0, 0)
@@ -19,13 +23,29 @@ export async function checkRateLimit(userId: string): Promise<{ allowed: boolean
     .from(tasks)
     .where(and(eq(tasks.userId, userId), gte(tasks.createdAt, today), isNull(tasks.deletedAt)))
 
-  const count = tasksToday.length
-  const remaining = Math.max(0, DAILY_TASK_LIMIT - count)
-  const allowed = count < DAILY_TASK_LIMIT
+  // Count user messages sent today across all tasks
+  const userMessagesToday = await db
+    .select()
+    .from(taskMessages)
+    .innerJoin(tasks, eq(taskMessages.taskId, tasks.id))
+    .where(
+      and(
+        eq(tasks.userId, userId),
+        eq(taskMessages.role, 'user'),
+        gte(taskMessages.createdAt, today),
+        isNull(tasks.deletedAt),
+      ),
+    )
+
+  // Total count includes both new tasks and follow-up messages
+  const count = tasksToday.length + userMessagesToday.length
+  const remaining = Math.max(0, maxMessagesPerDay - count)
+  const allowed = count < maxMessagesPerDay
 
   return {
     allowed,
     remaining,
+    total: maxMessagesPerDay,
     resetAt: tomorrow,
   }
 }
