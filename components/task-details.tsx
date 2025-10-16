@@ -97,8 +97,9 @@ const CODING_AGENTS = [
 const AGENT_MODELS = {
   claude: [
     { value: 'claude-sonnet-4-5-20250929', label: 'Sonnet 4.5' },
-    { value: 'claude-sonnet-4-20250514', label: 'Sonnet 4' },
+    { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
     { value: 'claude-opus-4-1-20250805', label: 'Opus 4.1' },
+    { value: 'claude-sonnet-4-20250514', label: 'Sonnet 4' },
   ],
   codex: [
     { value: 'openai/gpt-5', label: 'GPT-5' },
@@ -140,7 +141,7 @@ const DEFAULT_MODELS = {
   opencode: 'gpt-5',
 } as const
 
-export function TaskDetails({ task, maxSandboxDuration = 5 }: TaskDetailsProps) {
+export function TaskDetails({ task, maxSandboxDuration = 300 }: TaskDetailsProps) {
   const [optimisticStatus, setOptimisticStatus] = useState<Task['status'] | null>(null)
   const [mcpServers, setMcpServers] = useState<Connector[]>([])
   const [loadingMcpServers, setLoadingMcpServers] = useState(false)
@@ -226,7 +227,7 @@ export function TaskDetails({ task, maxSandboxDuration = 5 }: TaskDetailsProps) 
       // Sandbox timeout starts from when it was CREATED, not completed
       const createdTime = new Date(task.createdAt!).getTime()
       const now = Date.now()
-      const maxDurationMs = (task.maxDuration || 5) * 60 * 60 * 1000
+      const maxDurationMs = (task.maxDuration || 300) * 60 * 1000 // maxDuration is in minutes
       const elapsed = now - createdTime
       const remaining = maxDurationMs - elapsed
 
@@ -274,8 +275,9 @@ export function TaskDetails({ task, maxSandboxDuration = 5 }: TaskDetailsProps) 
   const AGENT_MODELS: Record<string, Array<{ value: string; label: string }>> = {
     claude: [
       { value: 'claude-sonnet-4-5-20250929', label: 'Sonnet 4.5' },
-      { value: 'claude-sonnet-4-20250514', label: 'Sonnet 4' },
+      { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
       { value: 'claude-opus-4-1-20250805', label: 'Opus 4.1' },
+      { value: 'claude-sonnet-4-20250514', label: 'Sonnet 4' },
     ],
     codex: [
       { value: 'openai/gpt-5', label: 'GPT-5' },
@@ -1699,7 +1701,7 @@ export function TaskDetails({ task, maxSandboxDuration = 5 }: TaskDetailsProps) 
                     htmlFor="try-again-keep-alive"
                     className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
                   >
-                    Keep Alive ({maxSandboxDuration} {maxSandboxDuration === 1 ? 'hour' : 'hours'} max)
+                    Keep Alive ({maxSandboxDuration} minutes max)
                   </Label>
                 </div>
               </div>

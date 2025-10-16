@@ -23,6 +23,8 @@ import { useConnectors } from '@/components/connectors-provider'
 import { ConnectorDialog } from '@/components/connectors/manage-connectors'
 import { ApiKeysDialog } from '@/components/api-keys-dialog'
 import { toast } from 'sonner'
+import { useAtom } from 'jotai'
+import { taskPromptAtom } from '@/lib/atoms/task'
 
 interface GitHubRepo {
   name: string
@@ -64,8 +66,9 @@ const CODING_AGENTS = [
 const AGENT_MODELS = {
   claude: [
     { value: 'claude-sonnet-4-5-20250929', label: 'Sonnet 4.5' },
-    { value: 'claude-sonnet-4-20250514', label: 'Sonnet 4' },
+    { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
     { value: 'claude-opus-4-1-20250805', label: 'Opus 4.1' },
+    { value: 'claude-sonnet-4-20250514', label: 'Sonnet 4' },
   ],
   codex: [
     { value: 'openai/gpt-5', label: 'GPT-5' },
@@ -139,11 +142,11 @@ export function TaskForm({
   selectedOwner,
   selectedRepo,
   initialInstallDependencies = false,
-  initialMaxDuration = 5,
+  initialMaxDuration = 300,
   initialKeepAlive = false,
-  maxSandboxDuration = 5,
+  maxSandboxDuration = 300,
 }: TaskFormProps) {
-  const [prompt, setPrompt] = useState('')
+  const [prompt, setPrompt] = useAtom(taskPromptAtom)
   const [selectedAgent, setSelectedAgent] = useState('claude')
   const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODELS.claude)
   const [repos, setRepos] = useState<GitHubRepo[]>([])
@@ -190,7 +193,7 @@ export function TaskForm({
       const isMobile = typeof window !== 'undefined' && window.innerWidth < 768
       if (!isMobile && !e.shiftKey) {
         e.preventDefault()
-        if (prompt.trim() && selectedOwner && selectedRepo) {
+        if (prompt.trim()) {
           // Find the form and submit it
           const form = e.currentTarget.closest('form')
           if (form) {
@@ -202,13 +205,8 @@ export function TaskForm({
     }
   }
 
-  // Load saved prompt, agent, model, and options on mount, and focus the prompt input
+  // Load saved agent, model, and options on mount, and focus the prompt input
   useEffect(() => {
-    const savedPrompt = localStorage.getItem('task-prompt')
-    if (savedPrompt) {
-      setPrompt(savedPrompt)
-    }
-
     const savedAgent = localStorage.getItem('last-selected-agent')
     if (savedAgent && CODING_AGENTS.some((agent) => agent.value === savedAgent)) {
       setSelectedAgent(savedAgent)
@@ -253,15 +251,6 @@ export function TaskForm({
 
     fetchApiKeys()
   }, [])
-
-  // Save prompt to localStorage as user types
-  useEffect(() => {
-    if (prompt) {
-      localStorage.setItem('task-prompt', prompt)
-    } else {
-      localStorage.removeItem('task-prompt')
-    }
-  }, [prompt])
 
   // Update model when agent changes
   useEffect(() => {
@@ -326,8 +315,30 @@ export function TaskForm({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (prompt.trim() && selectedOwner && selectedRepo) {
-      // Check if API key is required and available for the selected agent and model
+    if (!prompt.trim()) {
+      return
+    }
+
+    // If owner/repo not selected, let parent handle it (will show sign-in if needed)
+    // Don't clear localStorage here - user might need to sign in and come back
+    if (!selectedOwner || !selectedRepo) {
+      onSubmit({
+        prompt: prompt.trim(),
+        repoUrl: '',
+        selectedAgent,
+        selectedModel,
+        installDependencies,
+        maxDuration,
+        keepAlive,
+      })
+      return
+    }
+
+    // Check if API key is required and available for the selected agent and model
+    // Skip this check if we don't have repo data (likely not signed in)
+    const selectedRepoData = repos.find((repo) => repo.name === selectedRepo)
+
+    if (selectedRepoData) {
       try {
         const response = await fetch(`/api/api-keys/check?agent=${selectedAgent}&model=${selectedModel}`)
         const data = await response.json()
@@ -354,26 +365,19 @@ export function TaskForm({
         }
       } catch (error) {
         console.error('Error checking API key:', error)
-        toast.error('Failed to validate API key availability')
-        return
-      }
-
-      const selectedRepoData = repos.find((repo) => repo.name === selectedRepo)
-      if (selectedRepoData) {
-        // Clear the saved prompt since we're submitting it
-        localStorage.removeItem('task-prompt')
-
-        onSubmit({
-          prompt: prompt.trim(),
-          repoUrl: selectedRepoData.clone_url,
-          selectedAgent,
-          selectedModel,
-          installDependencies,
-          maxDuration,
-          keepAlive,
-        })
+        // Don't show error toast - might just be not authenticated, let parent handle it
       }
     }
+
+    onSubmit({
+      prompt: prompt.trim(),
+      repoUrl: selectedRepoData?.clone_url || '',
+      selectedAgent,
+      selectedModel,
+      installDependencies,
+      maxDuration,
+      keepAlive,
+    })
   }
 
   return (
@@ -730,7 +734,7 @@ export function TaskForm({
                                 htmlFor="keep-alive"
                                 className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
                               >
-                                Keep Alive ({maxSandboxDuration} {maxSandboxDuration === 1 ? 'hour' : 'hours'} max)
+                                Keep Alive ({maxSandboxDuration} minutes max)
                               </Label>
                             </div>
                             <p className="text-xs text-muted-foreground">
@@ -744,7 +748,7 @@ export function TaskForm({
 
                   <Button
                     type="submit"
-                    disabled={isSubmitting || !prompt.trim() || !selectedOwner || !selectedRepo}
+                    disabled={isSubmitting || !prompt.trim()}
                     size="sm"
                     className="rounded-full h-8 w-8 p-0"
                   >
