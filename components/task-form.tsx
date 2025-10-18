@@ -17,7 +17,7 @@ import {
 } from '@/components/ui/dialog'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Loader2, ArrowUp, Settings, X, Cable, Key } from 'lucide-react'
-import { Claude, Codex, Cursor, Gemini, OpenCode } from '@/components/logos'
+import { Claude, Codex, Copilot, Cursor, Gemini, OpenCode } from '@/components/logos'
 import { setInstallDependencies, setMaxDuration, setKeepAlive } from '@/lib/utils/cookies'
 import { useConnectors } from '@/components/connectors-provider'
 import { ConnectorDialog } from '@/components/connectors/manage-connectors'
@@ -57,6 +57,7 @@ interface TaskFormProps {
 const CODING_AGENTS = [
   { value: 'claude', label: 'Claude', icon: Claude },
   { value: 'codex', label: 'Codex', icon: Codex },
+  { value: 'copilot', label: 'Copilot', icon: Copilot },
   { value: 'cursor', label: 'Cursor', icon: Cursor },
   { value: 'gemini', label: 'Gemini', icon: Gemini },
   { value: 'opencode', label: 'opencode', icon: OpenCode },
@@ -77,6 +78,12 @@ const AGENT_MODELS = {
     { value: 'openai/gpt-5-nano', label: 'GPT-5 nano' },
     { value: 'gpt-5-pro', label: 'GPT-5 pro' },
     { value: 'openai/gpt-4.1', label: 'GPT-4.1' },
+  ],
+  copilot: [
+    { value: 'claude-sonnet-4.5', label: 'Claude Sonnet 4.5' },
+    { value: 'claude-sonnet-4', label: 'Claude Sonnet 4' },
+    { value: 'claude-haiku-4.5', label: 'Claude Haiku 4.5' },
+    { value: 'gpt-5', label: 'GPT-5' },
   ],
   cursor: [
     { value: 'auto', label: 'Auto' },
@@ -106,6 +113,7 @@ const AGENT_MODELS = {
 const DEFAULT_MODELS = {
   claude: 'claude-sonnet-4-5-20250929',
   codex: 'openai/gpt-5',
+  copilot: 'claude-sonnet-4.5',
   cursor: 'auto',
   gemini: 'gemini-2.5-pro',
   opencode: 'gpt-5',
@@ -115,6 +123,7 @@ const DEFAULT_MODELS = {
 const AGENT_API_KEY_REQUIREMENTS: Record<string, Provider[]> = {
   claude: ['anthropic'],
   codex: ['aigateway'], // Uses AI Gateway for OpenAI proxy
+  copilot: [], // Uses user's GitHub account token automatically
   cursor: ['cursor'],
   gemini: ['gemini'],
   opencode: [], // Will be determined dynamically based on selected model
@@ -281,7 +290,7 @@ export function TaskForm({
       try {
         // Check cache first
         const cacheKey = `github-repos-${selectedOwner}`
-        const cachedRepos = sessionStorage.getItem(cacheKey)
+        const cachedRepos = localStorage.getItem(cacheKey)
 
         if (cachedRepos) {
           try {
@@ -291,7 +300,7 @@ export function TaskForm({
             return
           } catch {
             console.warn('Failed to parse cached repos, fetching fresh data')
-            sessionStorage.removeItem(cacheKey)
+            localStorage.removeItem(cacheKey)
           }
         }
 
@@ -301,7 +310,7 @@ export function TaskForm({
           setRepos(reposList)
 
           // Cache the results
-          sessionStorage.setItem(cacheKey, JSON.stringify(reposList))
+          localStorage.setItem(cacheKey, JSON.stringify(reposList))
         }
       } catch (error) {
         console.error('Error fetching repositories:', error)
@@ -426,9 +435,10 @@ export function TaskForm({
 
           {/* Agent Selection */}
           <div className="p-4">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-2">
+            <div className="flex items-center justify-between gap-2">
+              {/* Left side: Agent, Model, and Option Chips */}
               <div className="flex items-center gap-2 flex-1 min-w-0">
-                {/* Agent Selection */}
+                {/* Agent Selection - Icon only on mobile, minimal width */}
                 <Select
                   value={selectedAgent}
                   onValueChange={(value) => {
@@ -438,8 +448,19 @@ export function TaskForm({
                   }}
                   disabled={isSubmitting}
                 >
-                  <SelectTrigger className="flex-1 sm:flex-none sm:w-auto sm:min-w-[120px] border-0 bg-transparent shadow-none focus:ring-0 h-8">
-                    <SelectValue placeholder="Agent" />
+                  <SelectTrigger className="w-auto sm:min-w-[120px] border-0 bg-transparent shadow-none focus:ring-0 h-8 shrink-0">
+                    <SelectValue placeholder="Agent">
+                      {selectedAgent &&
+                        (() => {
+                          const agent = CODING_AGENTS.find((a) => a.value === selectedAgent)
+                          return agent ? (
+                            <div className="flex items-center gap-2">
+                              <agent.icon className="w-4 h-4" />
+                              <span className="hidden sm:inline">{agent.label}</span>
+                            </div>
+                          ) : null
+                        })()}
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     {CODING_AGENTS.map((agent) => (
@@ -453,7 +474,7 @@ export function TaskForm({
                   </SelectContent>
                 </Select>
 
-                {/* Model Selection */}
+                {/* Model Selection - Fills available width on mobile */}
                 <Select
                   value={selectedModel}
                   onValueChange={(value) => {
@@ -463,8 +484,8 @@ export function TaskForm({
                   }}
                   disabled={isSubmitting}
                 >
-                  <SelectTrigger className="flex-1 sm:flex-none sm:w-auto sm:min-w-[140px] border-0 bg-transparent shadow-none focus:ring-0 h-8">
-                    <SelectValue placeholder="Model" />
+                  <SelectTrigger className="flex-1 sm:flex-none sm:w-auto sm:min-w-[140px] border-0 bg-transparent shadow-none focus:ring-0 h-8 min-w-0">
+                    <SelectValue placeholder="Model" className="truncate" />
                   </SelectTrigger>
                   <SelectContent>
                     {AGENT_MODELS[selectedAgent as keyof typeof AGENT_MODELS]?.map((model) => (
@@ -542,77 +563,9 @@ export function TaskForm({
                 )}
               </div>
 
-              {/* Options and Submit Buttons */}
-              <div className="flex items-center justify-between gap-2">
-                {/* Option Chips - Mobile version (left side) */}
-                <div className="flex sm:hidden items-center gap-2 flex-wrap">
-                  {(!installDependencies || maxDuration !== maxSandboxDuration || keepAlive) && (
-                    <>
-                      {!installDependencies && (
-                        <Badge
-                          variant="secondary"
-                          className="text-xs h-6 px-2 gap-1 cursor-pointer hover:bg-muted/20 bg-transparent border-0"
-                          onClick={() => setShowOptionsDialog(true)}
-                        >
-                          Skip Install
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-3 w-3 p-0 hover:bg-transparent"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              updateInstallDependencies(true)
-                            }}
-                          >
-                            <X className="h-2 w-2" />
-                          </Button>
-                        </Badge>
-                      )}
-                      {maxDuration !== maxSandboxDuration && (
-                        <Badge
-                          variant="secondary"
-                          className="text-xs h-6 px-2 gap-1 cursor-pointer hover:bg-muted/20 bg-transparent border-0"
-                          onClick={() => setShowOptionsDialog(true)}
-                        >
-                          {maxDuration}m
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-3 w-3 p-0 hover:bg-transparent"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              updateMaxDuration(maxSandboxDuration)
-                            }}
-                          >
-                            <X className="h-2 w-2" />
-                          </Button>
-                        </Badge>
-                      )}
-                      {keepAlive && (
-                        <Badge
-                          variant="secondary"
-                          className="text-xs h-6 px-2 gap-1 cursor-pointer hover:bg-muted/20 bg-transparent border-0"
-                          onClick={() => setShowOptionsDialog(true)}
-                        >
-                          Keep Alive
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-3 w-3 p-0 hover:bg-transparent"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              updateKeepAlive(false)
-                            }}
-                          >
-                            <X className="h-2 w-2" />
-                          </Button>
-                        </Badge>
-                      )}
-                    </>
-                  )}
-                </div>
-
-                {/* Buttons - right side */}
+              {/* Right side: Action Icons and Submit Button */}
+              <div className="flex items-center gap-2 shrink-0">
+                {/* Buttons */}
                 <div className="flex items-center gap-2">
                   <TooltipProvider delayDuration={1500} skipDelayDuration={1500}>
                     <Tooltip>
@@ -669,8 +622,28 @@ export function TaskForm({
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <DialogTrigger asChild>
-                            <Button type="button" variant="ghost" size="sm" className="rounded-full h-8 w-8 p-0">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="rounded-full h-8 w-8 p-0 relative"
+                            >
                               <Settings className="h-4 w-4" />
+                              {(() => {
+                                const customOptionsCount = [
+                                  !installDependencies,
+                                  maxDuration !== maxSandboxDuration,
+                                  keepAlive,
+                                ].filter(Boolean).length
+                                return customOptionsCount > 0 ? (
+                                  <Badge
+                                    variant="secondary"
+                                    className="absolute -top-1 -right-1 h-4 min-w-4 p-0 flex items-center justify-center text-[10px] rounded-full sm:hidden"
+                                  >
+                                    {customOptionsCount}
+                                  </Badge>
+                                ) : null
+                              })()}
                             </Button>
                           </DialogTrigger>
                         </TooltipTrigger>

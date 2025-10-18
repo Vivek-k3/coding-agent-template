@@ -303,7 +303,7 @@ export const Terminal = forwardRef<TerminalRef, TerminalProps>(function Terminal
       {/* Terminal output */}
       <div ref={terminalRef} className="flex-1 overflow-y-auto p-2 leading-relaxed">
         {history.length === 0 && (
-          <div className="text-gray-500">
+          <div className="text-muted-foreground">
             <p>Terminal ready. Type commands to execute in the Vercel Sandbox.</p>
             <p className="mt-1">Press Up/Down arrows to navigate command history.</p>
           </div>
@@ -322,7 +322,7 @@ export const Terminal = forwardRef<TerminalRef, TerminalProps>(function Terminal
       </div>
 
       {/* Terminal input */}
-      <div className="border-t border-gray-700 p-2 flex items-center gap-2">
+      <div className="border-t p-2 flex items-center gap-2">
         <div className="w-[8px] flex items-center justify-center shrink-0">
           {isAutocompleting || isExecuting ? (
             <div className="grid grid-cols-2 gap-[1px]">
@@ -352,7 +352,7 @@ export const Terminal = forwardRef<TerminalRef, TerminalProps>(function Terminal
           value={currentCommand}
           onChange={(e) => setCurrentCommand(e.target.value)}
           onKeyDown={handleKeyDown}
-          className="flex-1 bg-transparent outline-none text-white"
+          className="flex-1 bg-transparent outline-none text-white text-base md:text-xs"
           placeholder="Type a command..."
           autoFocus
         />

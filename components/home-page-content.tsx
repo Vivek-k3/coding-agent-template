@@ -15,6 +15,7 @@ import { GitHubIcon } from '@/components/icons/github-icon'
 import { getEnabledAuthProviders } from '@/lib/auth/providers'
 import { useSetAtom } from 'jotai'
 import { taskPromptAtom } from '@/lib/atoms/task'
+import { HomePageMobileFooter } from '@/components/home-page-mobile-footer'
 
 interface HomePageContentProps {
   initialSelectedOwner?: string
@@ -35,7 +36,7 @@ export function HomePageContent({
   initialKeepAlive = false,
   maxSandboxDuration = 300,
   user = null,
-  initialStars = 1022,
+  initialStars = 1056,
 }: HomePageContentProps) {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [selectedOwner, setSelectedOwnerState] = useState(initialSelectedOwner)
@@ -165,7 +166,7 @@ export function HomePageContent({
         />
       </div>
 
-      <div className="flex-1 flex items-center justify-center px-4">
+      <div className="flex-1 flex items-center justify-center px-4 pb-20 md:pb-4">
         <TaskForm
           onSubmit={handleTaskSubmit}
           isSubmitting={isSubmitting}
@@ -177,6 +178,9 @@ export function HomePageContent({
           maxSandboxDuration={maxSandboxDuration}
         />
       </div>
+
+      {/* Mobile Footer with Stars and Deploy Button */}
+      <HomePageMobileFooter initialStars={initialStars} />
 
       {/* Sign In Dialog */}
       <Dialog open={showSignInDialog} onOpenChange={setShowSignInDialog}>
