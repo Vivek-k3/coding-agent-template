@@ -74,6 +74,7 @@ import NotionIcon from '@/components/icons/notion-icon'
 import PlaywrightIcon from '@/components/icons/playwright-icon'
 import SupabaseIcon from '@/components/icons/supabase-icon'
 import VercelIcon from '@/components/icons/vercel-icon'
+import { PRStatusIcon } from '@/components/pr-status-icon'
 
 interface TaskDetailsProps {
   task: Task
@@ -112,9 +113,9 @@ const AGENT_MODELS = {
     { value: 'openai/gpt-4.1', label: 'GPT-4.1' },
   ],
   copilot: [
-    { value: 'claude-sonnet-4.5', label: 'Claude Sonnet 4.5' },
-    { value: 'claude-sonnet-4', label: 'Claude Sonnet 4' },
-    { value: 'claude-haiku-4.5', label: 'Claude Haiku 4.5' },
+    { value: 'claude-sonnet-4.5', label: 'Sonnet 4.5' },
+    { value: 'claude-sonnet-4', label: 'Sonnet 4' },
+    { value: 'claude-haiku-4.5', label: 'Haiku 4.5' },
     { value: 'gpt-5', label: 'GPT-5' },
   ],
   cursor: [
@@ -608,9 +609,9 @@ export function TaskDetails({ task, maxSandboxDuration = 300 }: TaskDetailsProps
       { value: 'openai/gpt-4.1', label: 'GPT-4.1' },
     ],
     copilot: [
-      { value: 'claude-sonnet-4.5', label: 'Claude Sonnet 4.5' },
-      { value: 'claude-sonnet-4', label: 'Claude Sonnet 4' },
-      { value: 'claude-haiku-4.5', label: 'Claude Haiku 4.5' },
+      { value: 'claude-sonnet-4.5', label: 'Sonnet 4.5' },
+      { value: 'claude-sonnet-4', label: 'Sonnet 4' },
+      { value: 'claude-haiku-4.5', label: 'Haiku 4.5' },
       { value: 'gpt-5', label: 'GPT-5' },
     ],
     cursor: [
@@ -1243,6 +1244,7 @@ export function TaskDetails({ task, maxSandboxDuration = 300 }: TaskDetailsProps
       <div className="space-y-2 md:space-y-3 pb-3 md:pb-6 border-b pl-3 md:pl-6 pr-3 flex-shrink-0">
         {/* Prompt */}
         <div className="flex items-center gap-2">
+          {prStatus && <PRStatusIcon status={prStatus} className="h-4 w-4 md:h-5 md:w-5" />}
           <p className="text-lg md:text-2xl flex-1 truncate">{task.prompt}</p>
           {currentStatus === 'completed' && task.repoUrl && task.branchName && (
             <>
@@ -1378,10 +1380,10 @@ export function TaskDetails({ task, maxSandboxDuration = 300 }: TaskDetailsProps
         </div>
 
         {/* Compact info row */}
-        <div className="flex items-center gap-2 md:gap-4 flex-wrap text-xs md:text-sm">
+        <div className="flex items-center gap-2 md:gap-4 md:flex-wrap text-xs md:text-sm overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
           {/* Repo */}
           {task.repoUrl && (
-            <div className="flex items-center gap-1.5 md:gap-2 min-w-0">
+            <div className="flex items-center gap-1.5 md:gap-2 flex-shrink-0">
               <svg
                 className="h-3.5 w-3.5 md:h-4 md:w-4 flex-shrink-0 text-muted-foreground"
                 fill="currentColor"
@@ -1397,35 +1399,35 @@ export function TaskDetails({ task, maxSandboxDuration = 300 }: TaskDetailsProps
                 href={task.repoUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-muted-foreground hover:text-foreground truncate max-w-[120px] md:max-w-none"
+                className="text-muted-foreground hover:text-foreground whitespace-nowrap"
               >
-                {task.repoUrl.replace('https://github.com/', '').replace('.git', '')}
+                {task.repoUrl.replace('https://github.com/', '').replace(/\.git$/, '')}
               </a>
             </div>
           )}
 
           {/* Branch */}
           {task.branchName && (
-            <div className="flex items-center gap-1.5 md:gap-2 min-w-0">
+            <div className="flex items-center gap-1.5 md:gap-2 flex-shrink-0">
               <GitBranch className="h-3.5 w-3.5 md:h-4 md:w-4 flex-shrink-0 text-muted-foreground" />
               {task.repoUrl ? (
                 <a
-                  href={`${task.repoUrl.replace('.git', '')}/tree/${task.branchName}`}
+                  href={`${task.repoUrl.replace(/\.git$/, '')}/tree/${task.branchName}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-muted-foreground hover:text-foreground truncate max-w-[120px] md:max-w-none"
+                  className="text-muted-foreground hover:text-foreground whitespace-nowrap"
                 >
                   {task.branchName}
                 </a>
               ) : (
-                <span className="text-muted-foreground truncate max-w-[120px] md:max-w-none">{task.branchName}</span>
+                <span className="text-muted-foreground whitespace-nowrap">{task.branchName}</span>
               )}
             </div>
           )}
 
           {/* Pull Request */}
           {prUrl && prNumber && (
-            <div className="flex items-center gap-1.5 md:gap-2 min-w-0">
+            <div className="flex items-center gap-1.5 md:gap-2 flex-shrink-0">
               {prStatus === 'merged' ? (
                 <svg
                   className="h-3.5 w-3.5 md:h-4 md:w-4 flex-shrink-0 text-purple-500"
@@ -1449,7 +1451,7 @@ export function TaskDetails({ task, maxSandboxDuration = 300 }: TaskDetailsProps
                 href={prUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-muted-foreground hover:text-foreground truncate"
+                className="text-muted-foreground hover:text-foreground whitespace-nowrap"
               >
                 #{prNumber}
               </a>
@@ -1458,14 +1460,14 @@ export function TaskDetails({ task, maxSandboxDuration = 300 }: TaskDetailsProps
 
           {/* Agent */}
           {(task.selectedAgent || task.selectedModel) && (
-            <div className="flex items-center gap-1.5 md:gap-2">
+            <div className="flex items-center gap-1.5 md:gap-2 flex-shrink-0">
               {task.selectedAgent &&
                 (() => {
                   const AgentLogo = getAgentLogo(task.selectedAgent)
                   return AgentLogo ? <AgentLogo className="w-3.5 h-3.5 md:w-4 md:h-4 flex-shrink-0" /> : null
                 })()}
               {task.selectedModel && (
-                <span className="text-muted-foreground truncate">
+                <span className="text-muted-foreground whitespace-nowrap">
                   {getModelName(task.selectedModel, task.selectedAgent)}
                 </span>
               )}
@@ -1924,16 +1926,100 @@ export function TaskDetails({ task, maxSandboxDuration = 300 }: TaskDetailsProps
                 </div>
               ) : activeTab === 'preview' ? (
                 <div className="h-full pb-3">
-                  <div className="bg-card rounded-md border overflow-hidden h-full">
+                  <div className="bg-card rounded-md border overflow-hidden h-full flex flex-col">
+                    {/* Preview Toolbar */}
+                    <div className="flex items-center gap-2 px-3 py-2 border-b bg-muted/50 flex-shrink-0 min-h-[40px]">
+                      <Monitor className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                      {task.sandboxUrl ? (
+                        <a
+                          href={task.sandboxUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-sm text-muted-foreground hover:text-foreground truncate flex-1 transition-colors"
+                          title={task.sandboxUrl}
+                        >
+                          {task.sandboxUrl}
+                        </a>
+                      ) : (
+                        <span className="text-sm text-muted-foreground truncate flex-1">Sandbox not running</span>
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setPreviewKey((prev) => prev + 1)}
+                        className="h-6 w-6 p-0 flex-shrink-0"
+                        title="Refresh Preview"
+                        disabled={!task.sandboxUrl}
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" />
+                      </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 w-6 p-0 flex-shrink-0"
+                            disabled={isRestartingDevServer || isStoppingSandbox || isStartingSandbox}
+                          >
+                            <MoreVertical className="h-3.5 w-3.5" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          {task.keepAlive && (
+                            <>
+                              {task.sandboxUrl ? (
+                                <DropdownMenuItem onClick={handleStopSandbox} disabled={isStoppingSandbox}>
+                                  {isStoppingSandbox ? (
+                                    <>
+                                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                      Stopping...
+                                    </>
+                                  ) : (
+                                    'Stop Sandbox'
+                                  )}
+                                </DropdownMenuItem>
+                              ) : (
+                                <DropdownMenuItem onClick={handleStartSandbox} disabled={isStartingSandbox}>
+                                  {isStartingSandbox ? (
+                                    <>
+                                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                      Starting...
+                                    </>
+                                  ) : (
+                                    'Start Sandbox'
+                                  )}
+                                </DropdownMenuItem>
+                              )}
+                            </>
+                          )}
+                          <DropdownMenuItem
+                            onClick={handleRestartDevServer}
+                            disabled={isRestartingDevServer || !task.sandboxUrl}
+                          >
+                            {isRestartingDevServer ? (
+                              <>
+                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                Restarting...
+                              </>
+                            ) : (
+                              'Restart Dev Server'
+                            )}
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
                     {task.sandboxUrl ? (
-                      <iframe
-                        src={task.sandboxUrl}
-                        className="w-full h-full border-0"
-                        title="Preview"
-                        sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals"
-                      />
+                      <div className="overflow-y-auto flex-1">
+                        <iframe
+                          key={previewKey}
+                          src={task.sandboxUrl}
+                          className="w-full h-full border-0"
+                          title="Preview"
+                          sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals"
+                        />
+                      </div>
                     ) : (
-                      <div className="flex items-center justify-center h-full text-muted-foreground text-sm p-6 text-center">
+                      <div className="flex items-center justify-center flex-1 text-muted-foreground text-sm p-6 text-center">
                         <div>
                           <p className="mb-1">Sandbox not running</p>
                           <p className="text-xs mb-4">

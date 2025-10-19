@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { toast } from 'sonner'
-import { Eye, EyeOff, Trash2, Check } from 'lucide-react'
+import { Eye, EyeOff } from 'lucide-react'
 
 interface ApiKeysDialogProps {
   open: boolean
@@ -32,6 +32,7 @@ export function ApiKeysDialog({ open, onOpenChange }: ApiKeysDialogProps) {
     aigateway: '',
   })
   const [savedKeys, setSavedKeys] = useState<Set<Provider>>(new Set())
+  const [clearedKeys, setClearedKeys] = useState<Set<Provider>>(new Set())
   const [showKeys, setShowKeys] = useState<Record<Provider, boolean>>({
     openai: false,
     gemini: false,
@@ -87,6 +88,11 @@ export function ApiKeysDialog({ open, onOpenChange }: ApiKeysDialogProps) {
       if (response.ok) {
         toast.success(`${PROVIDERS.find((p) => p.id === provider)?.name} API key saved`)
         setSavedKeys((prev) => new Set(prev).add(provider))
+        setClearedKeys((prev) => {
+          const newSet = new Set(prev)
+          newSet.delete(provider)
+          return newSet
+        })
         setApiKeys((prev) => ({ ...prev, [provider]: '' }))
       } else {
         const error = await response.json()
@@ -114,6 +120,11 @@ export function ApiKeysDialog({ open, onOpenChange }: ApiKeysDialogProps) {
           newSet.delete(provider)
           return newSet
         })
+        setClearedKeys((prev) => {
+          const newSet = new Set(prev)
+          newSet.delete(provider)
+          return newSet
+        })
       } else {
         const error = await response.json()
         toast.error(error.error || 'Failed to delete API key')
@@ -126,6 +137,12 @@ export function ApiKeysDialog({ open, onOpenChange }: ApiKeysDialogProps) {
     }
   }
 
+  const handleClear = (provider: Provider) => {
+    // Mark as cleared locally, no DB changes
+    setClearedKeys((prev) => new Set(prev).add(provider))
+    setApiKeys((prev) => ({ ...prev, [provider]: '' }))
+  }
+
   const toggleShowKey = (provider: Provider) => {
     setShowKeys((prev) => ({ ...prev, [provider]: !prev[provider] }))
   }
@@ -134,64 +151,66 @@ export function ApiKeysDialog({ open, onOpenChange }: ApiKeysDialogProps) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Manage API Keys</DialogTitle>
+          <DialogTitle>API Keys</DialogTitle>
           <DialogDescription>
-            Add your own API keys for AI agents. If not provided, system keys will be used.
+            Configure your own API keys. System defaults will be used if not provided.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-6 py-4">
-          {PROVIDERS.map((provider) => (
-            <div key={provider.id} className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label htmlFor={provider.id} className="font-medium">
+        <div className="space-y-2">
+          {PROVIDERS.map((provider) => {
+            const hasSavedKey = savedKeys.has(provider.id)
+            const isCleared = clearedKeys.has(provider.id)
+            const showSaveButton = !hasSavedKey || isCleared
+            const isInputDisabled = hasSavedKey && !isCleared
+
+            return (
+              <div key={provider.id} className="flex items-center gap-2">
+                <Label htmlFor={provider.id} className="text-sm w-24 shrink-0">
                   {provider.name}
                 </Label>
-                {savedKeys.has(provider.id) && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-green-600 flex items-center gap-1">
-                      <Check className="h-3 w-3" />
-                      Saved
-                    </span>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleDelete(provider.id)}
-                      disabled={loading}
-                      className="h-7 w-7 p-0 text-red-600 hover:text-red-700"
-                      title="Delete API key"
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </Button>
-                  </div>
-                )}
-              </div>
-              <div className="flex gap-2">
                 <div className="relative flex-1">
                   <Input
                     id={provider.id}
                     type={showKeys[provider.id] ? 'text' : 'password'}
-                    placeholder={provider.placeholder}
+                    placeholder={hasSavedKey && !isCleared ? '••••••••••••••••' : provider.placeholder}
                     value={apiKeys[provider.id]}
                     onChange={(e) => setApiKeys((prev) => ({ ...prev, [provider.id]: e.target.value }))}
-                    disabled={loading}
+                    disabled={loading || isInputDisabled}
+                    className="pr-9 h-8 text-sm"
                   />
+                  <button
+                    onClick={() => toggleShowKey(provider.id)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                    type="button"
+                    disabled={loading || isInputDisabled}
+                  >
+                    {showKeys[provider.id] ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  </button>
+                </div>
+                {showSaveButton ? (
+                  <Button
+                    size="sm"
+                    onClick={() => handleSave(provider.id)}
+                    disabled={loading || !apiKeys[provider.id].trim()}
+                    className="h-8 px-3 text-xs w-16"
+                  >
+                    Save
+                  </Button>
+                ) : (
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => toggleShowKey(provider.id)}
-                    className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0"
-                    type="button"
+                    onClick={() => handleClear(provider.id)}
+                    disabled={loading}
+                    className="h-8 px-3 text-xs w-16"
                   >
-                    {showKeys[provider.id] ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    Clear
                   </Button>
-                </div>
-                <Button onClick={() => handleSave(provider.id)} disabled={loading || !apiKeys[provider.id].trim()}>
-                  Save
-                </Button>
+                )}
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       </DialogContent>
     </Dialog>

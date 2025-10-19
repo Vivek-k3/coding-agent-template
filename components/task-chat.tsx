@@ -16,11 +16,14 @@ import {
   AlertCircle,
   XCircle,
   RefreshCw,
+  MoreVertical,
+  MessageSquare,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Streamdown } from 'streamdown'
 import { useAtom } from 'jotai'
 import { taskChatInputAtomFamily } from '@/lib/atoms/task'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 
 interface TaskChatProps {
   taskId: string
@@ -130,84 +133,105 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
     [taskId],
   )
 
-  const fetchPRComments = useCallback(async () => {
-    if (!task.prNumber || !task.repoUrl) return
+  const fetchPRComments = useCallback(
+    async (showLoading = true) => {
+      if (!task.prNumber || !task.repoUrl) return
 
-    // Don't refetch if already loaded
-    if (commentsLoadedRef.current) return
+      // Don't refetch if already loaded
+      if (commentsLoadedRef.current && showLoading) return
 
-    setLoadingComments(true)
-    setCommentsError(null)
-
-    try {
-      const response = await fetch(`/api/tasks/${taskId}/pr-comments`)
-      const data = await response.json()
-
-      if (response.ok && data.success) {
-        setPrComments(data.comments || [])
-        commentsLoadedRef.current = true
-      } else {
-        setCommentsError(data.error || 'Failed to fetch comments')
+      if (showLoading) {
+        setLoadingComments(true)
       }
-    } catch (err) {
-      console.error('Error fetching PR comments:', err)
-      setCommentsError('Failed to fetch comments')
-    } finally {
-      setLoadingComments(false)
-    }
-  }, [taskId, task.prNumber, task.repoUrl])
+      setCommentsError(null)
 
-  const fetchCheckRuns = useCallback(async () => {
-    if (!task.branchName || !task.repoUrl) return
+      try {
+        const response = await fetch(`/api/tasks/${taskId}/pr-comments`)
+        const data = await response.json()
 
-    // Don't refetch if already loaded
-    if (actionsLoadedRef.current) return
-
-    setLoadingActions(true)
-    setActionsError(null)
-
-    try {
-      const response = await fetch(`/api/tasks/${taskId}/check-runs`)
-      const data = await response.json()
-
-      if (response.ok && data.success) {
-        setCheckRuns(data.checkRuns || [])
-        actionsLoadedRef.current = true
-      } else {
-        setActionsError(data.error || 'Failed to fetch check runs')
+        if (response.ok && data.success) {
+          setPrComments(data.comments || [])
+          commentsLoadedRef.current = true
+        } else {
+          setCommentsError(data.error || 'Failed to fetch comments')
+        }
+      } catch (err) {
+        console.error('Error fetching PR comments:', err)
+        setCommentsError('Failed to fetch comments')
+      } finally {
+        if (showLoading) {
+          setLoadingComments(false)
+        }
       }
-    } catch (err) {
-      console.error('Error fetching check runs:', err)
-      setActionsError('Failed to fetch check runs')
-    } finally {
-      setLoadingActions(false)
-    }
-  }, [taskId, task.branchName, task.repoUrl])
+    },
+    [taskId, task.prNumber, task.repoUrl],
+  )
 
-  const fetchDeployment = useCallback(async () => {
-    // Don't refetch if already loaded
-    if (deploymentLoadedRef.current) return
+  const fetchCheckRuns = useCallback(
+    async (showLoading = true) => {
+      if (!task.branchName || !task.repoUrl) return
 
-    setLoadingDeployment(true)
-    setDeploymentError(null)
+      // Don't refetch if already loaded
+      if (actionsLoadedRef.current && showLoading) return
 
-    try {
-      const response = await fetch(`/api/tasks/${taskId}/deployment`)
-      const data = await response.json()
-
-      if (response.ok && data.success) {
-        setDeployment(data.data)
-        deploymentLoadedRef.current = true
-      } else {
-        setDeploymentError(data.error || 'Failed to fetch deployment')
+      if (showLoading) {
+        setLoadingActions(true)
       }
-    } catch (err) {
-      console.error('Error fetching deployment:', err)
-      setDeploymentError('Failed to fetch deployment')
-    } finally {
-      setLoadingDeployment(false)
-    }
-  }, [taskId])
+      setActionsError(null)
+
+      try {
+        const response = await fetch(`/api/tasks/${taskId}/check-runs`)
+        const data = await response.json()
+
+        if (response.ok && data.success) {
+          setCheckRuns(data.checkRuns || [])
+          actionsLoadedRef.current = true
+        } else {
+          setActionsError(data.error || 'Failed to fetch check runs')
+        }
+      } catch (err) {
+        console.error('Error fetching check runs:', err)
+        setActionsError('Failed to fetch check runs')
+      } finally {
+        if (showLoading) {
+          setLoadingActions(false)
+        }
+      }
+    },
+    [taskId, task.branchName, task.repoUrl],
+  )
+
+  const fetchDeployment = useCallback(
+    async (showLoading = true) => {
+      // Don't refetch if already loaded
+      if (deploymentLoadedRef.current && showLoading) return
+
+      if (showLoading) {
+        setLoadingDeployment(true)
+      }
+      setDeploymentError(null)
+
+      try {
+        const response = await fetch(`/api/tasks/${taskId}/deployment`)
+        const data = await response.json()
+
+        if (response.ok && data.success) {
+          setDeployment(data.data)
+          deploymentLoadedRef.current = true
+        } else {
+          setDeploymentError(data.error || 'Failed to fetch deployment')
+        }
+      } catch (err) {
+        console.error('Error fetching deployment:', err)
+        setDeploymentError('Failed to fetch deployment')
+      } finally {
+        if (showLoading) {
+          setLoadingDeployment(false)
+        }
+      }
+    },
+    [taskId],
+  )
 
   const handleRefresh = useCallback(() => {
     switch (activeTab) {
@@ -243,6 +267,36 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
 
     return () => clearInterval(interval)
   }, [fetchMessages])
+
+  // Auto-refresh for active tab (Comments, Checks, Deployments)
+  useEffect(() => {
+    if (activeTab === 'chat') return // Chat already has its own refresh
+
+    const refreshInterval = 30000 // 30 seconds
+
+    const interval = setInterval(() => {
+      switch (activeTab) {
+        case 'comments':
+          if (task.prNumber) {
+            commentsLoadedRef.current = false
+            fetchPRComments(false) // Don't show loading on auto-refresh
+          }
+          break
+        case 'actions':
+          if (task.branchName) {
+            actionsLoadedRef.current = false
+            fetchCheckRuns(false) // Don't show loading on auto-refresh
+          }
+          break
+        case 'deployments':
+          deploymentLoadedRef.current = false
+          fetchDeployment(false) // Don't show loading on auto-refresh
+          break
+      }
+    }, refreshInterval)
+
+    return () => clearInterval(interval)
+  }, [activeTab, task.prNumber, task.branchName, fetchPRComments, fetchCheckRuns, fetchDeployment])
 
   // Reset cache and refetch when PR number changes (PR created/updated)
   useEffect(() => {
@@ -495,6 +549,20 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
     }
   }
 
+  const handleSendCommentAsFollowUp = (comment: PRComment) => {
+    // Format the message to indicate it came from a PR comment
+    const formattedMessage = `**PR Comment from @${comment.user.login}:**\n\n${comment.body}\n\n---\n\nPlease address the above PR comment and make the necessary changes to ensure the feedback is accurately addressed.`
+
+    // Set the message in the chat input
+    setNewMessage(formattedMessage)
+
+    // Switch to chat tab
+    setActiveTab('chat')
+
+    // Show success toast
+    toast.success('Comment added to chat input')
+  }
+
   // Use a non-narrowed variable for tab button comparisons
   const currentTab = activeTab as string
 
@@ -716,6 +784,19 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
                         </Streamdown>
                       </div>
                     </div>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted transition-colors">
+                          <MoreVertical className="h-4 w-4 text-muted-foreground" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => handleSendCommentAsFollowUp(comment)}>
+                          <MessageSquare className="h-4 w-4 mr-2" />
+                          Send as Follow-Up
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
                 </div>
               ))}
@@ -751,43 +832,46 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
           >
             {message.role === 'user' ? (
               <Card className="p-2 bg-card rounded-md relative z-10">
-                <div className="text-xs">
-                  <Streamdown
-                    components={{
-                      code: ({ className, children, ...props }: React.ComponentPropsWithoutRef<'code'>) => (
-                        <code className={`${className} !text-xs`} {...props}>
-                          {children}
-                        </code>
-                      ),
-                      pre: ({ children, ...props }: React.ComponentPropsWithoutRef<'pre'>) => (
-                        <pre className="!text-xs" {...props}>
-                          {children}
-                        </pre>
-                      ),
-                      p: ({ children, ...props }: React.ComponentPropsWithoutRef<'p'>) => (
-                        <p className="text-xs" {...props}>
-                          {children}
-                        </p>
-                      ),
-                      ul: ({ children, ...props }: React.ComponentPropsWithoutRef<'ul'>) => (
-                        <ul className="text-xs list-disc ml-4" {...props}>
-                          {children}
-                        </ul>
-                      ),
-                      ol: ({ children, ...props }: React.ComponentPropsWithoutRef<'ol'>) => (
-                        <ol className="text-xs list-decimal ml-4" {...props}>
-                          {children}
-                        </ol>
-                      ),
-                      li: ({ children, ...props }: React.ComponentPropsWithoutRef<'li'>) => (
-                        <li className="text-xs mb-2" {...props}>
-                          {Children.toArray(children).filter((c) => typeof c === 'string' || isValidElement(c))}
-                        </li>
-                      ),
-                    }}
-                  >
-                    {message.content}
-                  </Streamdown>
+                <div className="relative max-h-[80px] overflow-hidden">
+                  <div className="text-xs">
+                    <Streamdown
+                      components={{
+                        code: ({ className, children, ...props }: React.ComponentPropsWithoutRef<'code'>) => (
+                          <code className={`${className} !text-xs`} {...props}>
+                            {children}
+                          </code>
+                        ),
+                        pre: ({ children, ...props }: React.ComponentPropsWithoutRef<'pre'>) => (
+                          <pre className="!text-xs" {...props}>
+                            {children}
+                          </pre>
+                        ),
+                        p: ({ children, ...props }: React.ComponentPropsWithoutRef<'p'>) => (
+                          <p className="text-xs" {...props}>
+                            {children}
+                          </p>
+                        ),
+                        ul: ({ children, ...props }: React.ComponentPropsWithoutRef<'ul'>) => (
+                          <ul className="text-xs list-disc ml-4" {...props}>
+                            {children}
+                          </ul>
+                        ),
+                        ol: ({ children, ...props }: React.ComponentPropsWithoutRef<'ol'>) => (
+                          <ol className="text-xs list-decimal ml-4" {...props}>
+                            {children}
+                          </ol>
+                        ),
+                        li: ({ children, ...props }: React.ComponentPropsWithoutRef<'li'>) => (
+                          <li className="text-xs mb-2" {...props}>
+                            {Children.toArray(children).filter((c) => typeof c === 'string' || isValidElement(c))}
+                          </li>
+                        ),
+                      }}
+                    >
+                      {message.content}
+                    </Streamdown>
+                  </div>
+                  <div className="absolute bottom-0 left-0 right-0 h-6 bg-gradient-to-t from-card to-transparent pointer-events-none" />
                 </div>
                 <div className="flex items-center gap-0.5 justify-end">
                   <button
@@ -996,39 +1080,44 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
   return (
     <div className="flex flex-col h-full">
       {/* Header Tabs */}
-      <div className="py-2 flex items-center gap-1 flex-shrink-0 h-[46px] overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-        <button
-          onClick={() => setActiveTab('chat')}
-          className={`text-sm font-semibold px-2 py-1 rounded transition-colors whitespace-nowrap flex-shrink-0 ${
-            currentTab === 'chat' ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          Chat
-        </button>
-        <button
-          onClick={() => setActiveTab('comments')}
-          className={`text-sm font-semibold px-2 py-1 rounded transition-colors whitespace-nowrap flex-shrink-0 ${
-            currentTab === 'comments' ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          Comments
-        </button>
-        <button
-          onClick={() => setActiveTab('actions')}
-          className={`text-sm font-semibold px-2 py-1 rounded transition-colors whitespace-nowrap flex-shrink-0 ${
-            currentTab === 'actions' ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          Checks
-        </button>
-        <button
-          onClick={() => setActiveTab('deployments')}
-          className={`text-sm font-semibold px-2 py-1 rounded transition-colors whitespace-nowrap flex-shrink-0 ${
-            currentTab === 'deployments' ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          Deployments
-        </button>
+      <div className="py-2 flex items-center justify-between gap-1 flex-shrink-0 h-[46px] overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setActiveTab('chat')}
+            className={`text-sm font-semibold px-2 py-1 rounded transition-colors whitespace-nowrap flex-shrink-0 ${
+              currentTab === 'chat' ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            Chat
+          </button>
+          <button
+            onClick={() => setActiveTab('comments')}
+            className={`text-sm font-semibold px-2 py-1 rounded transition-colors whitespace-nowrap flex-shrink-0 ${
+              currentTab === 'comments' ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            Comments
+          </button>
+          <button
+            onClick={() => setActiveTab('actions')}
+            className={`text-sm font-semibold px-2 py-1 rounded transition-colors whitespace-nowrap flex-shrink-0 ${
+              currentTab === 'actions' ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            Checks
+          </button>
+          <button
+            onClick={() => setActiveTab('deployments')}
+            className={`text-sm font-semibold px-2 py-1 rounded transition-colors whitespace-nowrap flex-shrink-0 ${
+              currentTab === 'deployments' ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            Deployments
+          </button>
+        </div>
+        <Button variant="ghost" size="sm" onClick={handleRefresh} className="h-6 w-6 p-0 flex-shrink-0" title="Refresh">
+          <RefreshCw className="h-4 w-4" />
+        </Button>
       </div>
 
       {/* Tab Content */}
