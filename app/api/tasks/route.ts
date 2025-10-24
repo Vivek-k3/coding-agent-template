@@ -7,7 +7,8 @@ import { createSandbox } from '@/lib/sandbox/creation'
 import { executeAgentInSandbox, AgentType } from '@/lib/sandbox/agents'
 import { pushChangesToBranch, shutdownSandbox } from '@/lib/sandbox/git'
 import { unregisterSandbox } from '@/lib/sandbox/sandbox-registry'
-import { detectPackageManager } from '@/lib/sandbox/package-manager'
+import { detectPackageManager, getDevCommandArgs } from '@/lib/sandbox/package-manager'
+import { detectPortFromRepo } from '@/lib/sandbox/port-detection'
 import { runCommandInSandbox } from '@/lib/sandbox/commands'
 import { eq, desc, or, and, isNull } from 'drizzle-orm'
 import { createTaskLogger } from '@/lib/utils/task-logger'
@@ -435,6 +436,10 @@ async function processTask(
     await logger.updateProgress(15, 'Creating sandbox environment')
     console.log('Creating sandbox')
 
+    // Detect the appropriate port for the project
+    const port = await detectPortFromRepo(repoUrl, githubToken)
+    console.log(`Detected port ${port} for project`)
+
     // Create sandbox with progress callback and 5-minute timeout
     const sandboxResult = await createSandbox(
       {
@@ -445,7 +450,7 @@ async function processTask(
         gitAuthorEmail: githubUser?.username ? `${githubUser.username}@users.noreply.github.com` : 'agent@example.com',
         apiKeys,
         timeout: `${maxDuration}m`,
-        ports: [3000],
+        ports: [port],
         runtime: 'node22',
         resources: { vcpus: 4 },
         taskPrompt: prompt,
@@ -676,7 +681,7 @@ async function processTask(
                 // Detect package manager and start dev server
                 const packageManager = await detectPackageManager(sandbox!, logger)
                 const devCommand = packageManager === 'npm' ? 'npm' : packageManager
-                const devArgs = packageManager === 'npm' ? ['run', 'dev'] : ['dev']
+                const devArgs = await getDevCommandArgs(sandbox!, packageManager)
 
                 // Start dev server in detached mode (runs in background)
                 await sandbox!.runCommand({
