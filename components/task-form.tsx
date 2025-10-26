@@ -8,13 +8,12 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from '@/components/ui/dialog'
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Loader2, ArrowUp, Settings, X, Cable, Users } from 'lucide-react'
 import { Claude, Codex, Copilot, Cursor, Gemini, OpenCode } from '@/components/logos'
@@ -22,8 +21,10 @@ import { setInstallDependencies, setMaxDuration, setKeepAlive } from '@/lib/util
 import { useConnectors } from '@/components/connectors-provider'
 import { ConnectorDialog } from '@/components/connectors/manage-connectors'
 import { toast } from 'sonner'
-import { useAtom } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { taskPromptAtom } from '@/lib/atoms/task'
+import { lastSelectedAgentAtom, lastSelectedModelAtomFamily } from '@/lib/atoms/agent-selection'
+import { githubReposAtomFamily } from '@/lib/atoms/github-cache'
 import { useSearchParams } from 'next/navigation'
 
 interface GitHubRepo {
@@ -159,17 +160,17 @@ export function TaskForm({
   maxSandboxDuration = 300,
 }: TaskFormProps) {
   const [prompt, setPrompt] = useAtom(taskPromptAtom)
-  const [selectedAgent, setSelectedAgent] = useState('claude')
+  const [savedAgent, setSavedAgent] = useAtom(lastSelectedAgentAtom)
+  const [selectedAgent, setSelectedAgent] = useState(savedAgent || 'claude')
   const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODELS.claude)
   const [selectedModels, setSelectedModels] = useState<string[]>([])
-  const [repos, setRepos] = useState<GitHubRepo[]>([])
+  const [repos, setRepos] = useAtom(githubReposAtomFamily(selectedOwner))
   const [, setLoadingRepos] = useState(false)
 
   // Options state - initialize with server values
   const [installDependencies, setInstallDependenciesState] = useState(initialInstallDependencies)
   const [maxDuration, setMaxDurationState] = useState(initialMaxDuration)
   const [keepAlive, setKeepAliveState] = useState(initialKeepAlive)
-  const [showOptionsDialog, setShowOptionsDialog] = useState(false)
   const [showMcpServersDialog, setShowMcpServersDialog] = useState(false)
 
   // Connectors state
@@ -234,26 +235,10 @@ export function TaskForm({
           setSelectedModel(urlModel)
         }
       }
-    } else {
-      // Fall back to localStorage
-      const savedAgent = localStorage.getItem('last-selected-agent')
-      if (
-        savedAgent &&
-        CODING_AGENTS.some((agent) => agent.value === savedAgent && !('isDivider' in agent && agent.isDivider))
-      ) {
+    } else if (savedAgent) {
+      // Fall back to saved agent from Jotai atom
+      if (CODING_AGENTS.some((agent) => agent.value === savedAgent && !('isDivider' in agent && agent.isDivider))) {
         setSelectedAgent(savedAgent)
-
-        // Load saved model for this agent
-        const savedModel = localStorage.getItem(`last-selected-model-${savedAgent}`)
-        const agentModels = AGENT_MODELS[savedAgent as keyof typeof AGENT_MODELS]
-        if (savedModel && agentModels?.some((model) => model.value === savedModel)) {
-          setSelectedModel(savedModel)
-        } else {
-          const defaultModel = DEFAULT_MODELS[savedAgent as keyof typeof DEFAULT_MODELS]
-          if (defaultModel) {
-            setSelectedModel(defaultModel)
-          }
-        }
       }
     }
 
@@ -266,6 +251,11 @@ export function TaskForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Get saved model atom for current agent
+  const savedModelAtom = lastSelectedModelAtomFamily(selectedAgent)
+  const savedModel = useAtomValue(savedModelAtom)
+  const setSavedModel = useSetAtom(savedModelAtom)
+
   // Update model when agent changes
   useEffect(() => {
     if (selectedAgent) {
@@ -275,7 +265,6 @@ export function TaskForm({
       }
 
       // Load saved model for this agent or use default
-      const savedModel = localStorage.getItem(`last-selected-model-${selectedAgent}`)
       const agentModels = AGENT_MODELS[selectedAgent as keyof typeof AGENT_MODELS]
       if (savedModel && agentModels?.some((model) => model.value === savedModel)) {
         setSelectedModel(savedModel)
@@ -286,41 +275,28 @@ export function TaskForm({
         }
       }
     }
-  }, [selectedAgent])
+  }, [selectedAgent, savedModel])
 
   // Fetch repositories when owner changes
   useEffect(() => {
     if (!selectedOwner) {
-      setRepos([])
+      setRepos(null)
       return
     }
 
     const fetchRepos = async () => {
       setLoadingRepos(true)
       try {
-        // Check cache first
-        const cacheKey = `github-repos-${selectedOwner}`
-        const cachedRepos = localStorage.getItem(cacheKey)
-
-        if (cachedRepos) {
-          try {
-            const parsedRepos = JSON.parse(cachedRepos)
-            setRepos(parsedRepos)
-            setLoadingRepos(false)
-            return
-          } catch {
-            console.warn('Failed to parse cached repos, fetching fresh data')
-            localStorage.removeItem(cacheKey)
-          }
+        // Check cache first (repos is from the atom)
+        if (repos && repos.length > 0) {
+          setLoadingRepos(false)
+          return
         }
 
         const response = await fetch(`/api/github/repos?owner=${selectedOwner}`)
         if (response.ok) {
           const reposList = await response.json()
           setRepos(reposList)
-
-          // Cache the results
-          localStorage.setItem(cacheKey, JSON.stringify(reposList))
         }
       } catch (error) {
         console.error('Error fetching repositories:', error)
@@ -330,7 +306,7 @@ export function TaskForm({
     }
 
     fetchRepos()
-  }, [selectedOwner])
+  }, [selectedOwner, repos, setRepos])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -362,7 +338,7 @@ export function TaskForm({
 
     // Check if API key is required and available for the selected agent and model
     // Skip this check if we don't have repo data (likely not signed in) or if multi-agent mode
-    const selectedRepoData = repos.find((repo) => repo.name === selectedRepo)
+    const selectedRepoData = repos?.find((repo) => repo.name === selectedRepo)
 
     if (selectedRepoData && selectedAgent !== 'multi-agent') {
       try {
@@ -457,8 +433,8 @@ export function TaskForm({
                   value={selectedAgent}
                   onValueChange={(value) => {
                     setSelectedAgent(value)
-                    // Save to localStorage immediately
-                    localStorage.setItem('last-selected-agent', value)
+                    // Save to Jotai atom immediately
+                    setSavedAgent(value)
                   }}
                   disabled={isSubmitting}
                 >
@@ -544,8 +520,8 @@ export function TaskForm({
                     value={selectedModel}
                     onValueChange={(value) => {
                       setSelectedModel(value)
-                      // Save to localStorage immediately
-                      localStorage.setItem(`last-selected-model-${selectedAgent}`, value)
+                      // Save to Jotai atom immediately
+                      setSavedModel(value)
                     }}
                     disabled={isSubmitting}
                   >
@@ -566,11 +542,7 @@ export function TaskForm({
                 {(!installDependencies || maxDuration !== maxSandboxDuration || keepAlive) && (
                   <div className="hidden sm:flex items-center gap-2 flex-wrap">
                     {!installDependencies && (
-                      <Badge
-                        variant="secondary"
-                        className="text-xs h-6 px-2 gap-1 cursor-pointer hover:bg-muted/20 bg-transparent border-0"
-                        onClick={() => setShowOptionsDialog(true)}
-                      >
+                      <Badge variant="secondary" className="text-xs h-6 px-2 gap-1 bg-transparent border-0">
                         Skip Install
                         <Button
                           variant="ghost"
@@ -586,11 +558,7 @@ export function TaskForm({
                       </Badge>
                     )}
                     {maxDuration !== maxSandboxDuration && (
-                      <Badge
-                        variant="secondary"
-                        className="text-xs h-6 px-2 gap-1 cursor-pointer hover:bg-muted/20 bg-transparent border-0"
-                        onClick={() => setShowOptionsDialog(true)}
-                      >
+                      <Badge variant="secondary" className="text-xs h-6 px-2 gap-1 bg-transparent border-0">
                         {maxDuration}m
                         <Button
                           variant="ghost"
@@ -606,11 +574,7 @@ export function TaskForm({
                       </Badge>
                     )}
                     {keepAlive && (
-                      <Badge
-                        variant="secondary"
-                        className="text-xs h-6 px-2 gap-1 cursor-pointer hover:bg-muted/20 bg-transparent border-0"
-                        onClick={() => setShowOptionsDialog(true)}
-                      >
+                      <Badge variant="secondary" className="text-xs h-6 px-2 gap-1 bg-transparent border-0">
                         Keep Alive
                         <Button
                           variant="ghost"
@@ -659,10 +623,10 @@ export function TaskForm({
                       </TooltipContent>
                     </Tooltip>
 
-                    <Dialog open={showOptionsDialog} onOpenChange={setShowOptionsDialog}>
+                    <DropdownMenu>
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <DialogTrigger asChild>
+                          <DropdownMenuTrigger asChild>
                             <Button
                               type="button"
                               variant="ghost"
@@ -686,58 +650,55 @@ export function TaskForm({
                                 ) : null
                               })()}
                             </Button>
-                          </DialogTrigger>
+                          </DropdownMenuTrigger>
                         </TooltipTrigger>
                         <TooltipContent>
                           <p>Task Options</p>
                         </TooltipContent>
                       </Tooltip>
-                      <DialogContent className="max-w-2xl max-h-[80vh] overflow-hidden flex flex-col">
-                        <DialogHeader>
-                          <DialogTitle>Task Options</DialogTitle>
-                          <DialogDescription>Configure settings for your task execution.</DialogDescription>
-                        </DialogHeader>
-                        <div className="space-y-6 py-4 overflow-y-auto flex-1">
-                          <div className="space-y-4">
-                            <h3 className="text-sm font-semibold">Task Settings</h3>
-                            <div className="flex items-center space-x-2">
-                              <Checkbox
-                                id="install-deps"
-                                checked={installDependencies}
-                                onCheckedChange={(checked) => updateInstallDependencies(checked === true)}
-                              />
-                              <Label
-                                htmlFor="install-deps"
-                                className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
-                              >
-                                Install Dependencies?
-                              </Label>
-                            </div>
-                            <div className="space-y-2">
-                              <Label htmlFor="max-duration" className="text-sm font-medium">
-                                Maximum Duration
-                              </Label>
-                              <Select
-                                value={maxDuration.toString()}
-                                onValueChange={(value) => updateMaxDuration(parseInt(value))}
-                              >
-                                <SelectTrigger id="max-duration" className="w-full">
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="5">5 minutes</SelectItem>
-                                  <SelectItem value="10">10 minutes</SelectItem>
-                                  <SelectItem value="15">15 minutes</SelectItem>
-                                  <SelectItem value="30">30 minutes</SelectItem>
-                                  <SelectItem value="45">45 minutes</SelectItem>
-                                  <SelectItem value="60">1 hour</SelectItem>
-                                  <SelectItem value="120">2 hours</SelectItem>
-                                  <SelectItem value="180">3 hours</SelectItem>
-                                  <SelectItem value="240">4 hours</SelectItem>
-                                  <SelectItem value="300">5 hours</SelectItem>
-                                </SelectContent>
-                              </Select>
-                            </div>
+                      <DropdownMenuContent className="w-72" align="end">
+                        <DropdownMenuLabel>Task Options</DropdownMenuLabel>
+                        <DropdownMenuSeparator />
+                        <div className="p-2 space-y-4">
+                          <div className="flex items-center space-x-2">
+                            <Checkbox
+                              id="install-deps"
+                              checked={installDependencies}
+                              onCheckedChange={(checked) => updateInstallDependencies(checked === true)}
+                            />
+                            <Label
+                              htmlFor="install-deps"
+                              className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+                            >
+                              Install Dependencies?
+                            </Label>
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="max-duration" className="text-sm font-medium">
+                              Maximum Duration
+                            </Label>
+                            <Select
+                              value={maxDuration.toString()}
+                              onValueChange={(value) => updateMaxDuration(parseInt(value))}
+                            >
+                              <SelectTrigger id="max-duration" className="w-full h-8">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="5">5 minutes</SelectItem>
+                                <SelectItem value="10">10 minutes</SelectItem>
+                                <SelectItem value="15">15 minutes</SelectItem>
+                                <SelectItem value="30">30 minutes</SelectItem>
+                                <SelectItem value="45">45 minutes</SelectItem>
+                                <SelectItem value="60">1 hour</SelectItem>
+                                <SelectItem value="120">2 hours</SelectItem>
+                                <SelectItem value="180">3 hours</SelectItem>
+                                <SelectItem value="240">4 hours</SelectItem>
+                                <SelectItem value="300">5 hours</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div className="space-y-2">
                             <div className="flex items-center space-x-2">
                               <Checkbox
                                 id="keep-alive"
@@ -746,18 +707,16 @@ export function TaskForm({
                               />
                               <Label
                                 htmlFor="keep-alive"
-                                className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                                className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
                               >
-                                Keep Alive ({maxSandboxDuration} minutes max)
+                                Keep Alive ({maxSandboxDuration}m max)
                               </Label>
                             </div>
-                            <p className="text-xs text-muted-foreground">
-                              Keep the sandbox running after task completion to reuse it for follow-up messages.
-                            </p>
+                            <p className="text-xs text-muted-foreground pl-6">Keep sandbox running after completion.</p>
                           </div>
                         </div>
-                      </DialogContent>
-                    </Dialog>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </TooltipProvider>
 
                   <Button
